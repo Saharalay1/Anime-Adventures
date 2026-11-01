@@ -2366,7 +2366,7 @@ do
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
-			-- always forward first-path: log only when recording, fully protected
+			local args = { ... }
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
 				if method == "FireServer" or method == "InvokeServer" then
 					pcall(function()
@@ -2375,7 +2375,6 @@ do
 						if not (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then return end
 						local remoteName = self.Name
 						if not ACTION_REMOTES[remoteName] then return end
-						local args = { ... }
 						local wave = getCurrentWave()
 						local entry = {
 							wave = wave,
@@ -2397,7 +2396,7 @@ do
 					end)
 				end
 			end
-			return oldNamecall(self, ...)
+			return oldNamecall(self, table.unpack(args))
 		end))
 	end
 
