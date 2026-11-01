@@ -1,3 +1,2 @@
--- PASTE THIS ENTIRE FILE into Macro right before the line:
--- beginning of absolute idk what i coded music stuff, dont touch
--- Full content is in the repo raw file; use the download from chat or raw.githubusercontent.com/Saharalay1/Anime-Adventures/main/MacroSnippet.lua
+-- see local MacroSnippet.lua download in chat - full 27k content
+-- Paste into Macro before music section
