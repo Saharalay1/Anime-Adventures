@@ -86,7 +86,6 @@ do
 		return os.clock() - start
 	end
 
-	-- persistent on disk: FEMBOY/macroconfigs/*.json (survives rejoin)
 	local function ensureMacroFolder()
 		if not isfolder(table1.folder1) then
 			makefolder(table1.folder1)
@@ -99,7 +98,7 @@ do
 	end
 
 	local function macroFilePath(name)
-		return ensureMacroFolder() .. "/" .. name .. ".json"
+		return ensureMacroFolder() .. "/" .. tostring(name) .. ".json"
 	end
 
 	if not table1.autoloadPath then
@@ -197,7 +196,6 @@ do
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
 			local results = table.pack(oldNamecall(self, ...))
-
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
 				if method == "FireServer" or method == "InvokeServer" then
 					local remoteSelf = self
@@ -206,10 +204,7 @@ do
 					local ret = results[1]
 					task.defer(function()
 						pcall(function()
-							-- server rejected this call — do not store in macro
-							if ret == false then
-								return
-							end
+							if ret == false then return end
 							if typeof(remoteSelf) ~= "Instance" then return end
 							local cn = remoteSelf.ClassName
 							if cn ~= "RemoteEvent" and cn ~= "RemoteFunction" then return end
@@ -241,7 +236,6 @@ do
 					end)
 				end
 			end
-
 			return table.unpack(results, 1, results.n)
 		end))
 	end
@@ -258,11 +252,13 @@ do
 		table1.clearTemporaryMacro()
 		table1.recording = true
 		onWaveChanged(getCurrentWave())
+		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end
 
 	function table1.stopRecording()
 		if not table1.recording then return end
 		table1.recording = false
+		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end
 
 	function table1.toggleRecording()
@@ -276,12 +272,12 @@ do
 	function table1.getMacroList()
 		local folder = ensureMacroFolder()
 		table1.macrolistnames = {}
-		if listfiles then
+		if type(listfiles) == "function" then
 			local ok, files = pcall(listfiles, folder)
 			if ok and type(files) == "table" then
 				for _, f in ipairs(files) do
 					local name = tostring(f):match("([^/\\]+)%.json$")
-					if name then
+					if name and name ~= "" then
 						table.insert(table1.macrolistnames, name)
 					end
 				end
@@ -300,9 +296,8 @@ do
 			settings = deepCopy(table1.macroSettings),
 			actions = deepCopy(table1.recordedActions),
 		}
-		local json = table1.HttpService:JSONEncode(data)
 		local ok = pcall(function()
-			writefile(macroFilePath(name), json)
+			writefile(macroFilePath(name), table1.HttpService:JSONEncode(data))
 		end)
 		if not ok then return false end
 		table1.currentMacroName = name
@@ -312,7 +307,7 @@ do
 	function table1.loadMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
 		local path = macroFilePath(name)
-		if not isfile or not isfile(path) then return false end
+		if type(isfile) ~= "function" or not isfile(path) then return false end
 		local ok, data = pcall(function()
 			return table1.HttpService:JSONDecode(readfile(path))
 		end)
@@ -330,7 +325,7 @@ do
 	function table1.deleteMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
 		local path = macroFilePath(name)
-		if isfile and isfile(path) and delfile then
+		if type(isfile) == "function" and isfile(path) and type(delfile) == "function" then
 			pcall(delfile, path)
 			if table1.currentMacroName == name then
 				table1.currentMacroName = nil
@@ -342,8 +337,9 @@ do
 
 	function table1.createMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
+		ensureMacroFolder()
 		local path = macroFilePath(name)
-		if isfile and isfile(path) then return false end
+		if type(isfile) == "function" and isfile(path) then return false end
 		local data = {
 			name = name,
 			created = os.time(),
@@ -355,7 +351,6 @@ do
 		end)
 		if not ok then return false end
 		table1.currentMacroName = name
-		table1.recordedActions = {}
 		return true
 	end
 
@@ -435,7 +430,6 @@ do
 		end
 		if #table1.recordedActions == 0 then return end
 		table1.replaying = true
-
 		if table1.macroSettings.autovotestart then
 			local voteRemote = getRemoteByName("vote_start")
 			if voteRemote and voteRemote:IsA("RemoteFunction") then
@@ -446,11 +440,8 @@ do
 				table1.macroIgnoreReplay = false
 			end
 		end
-
-		-- always start from the live current wave (skip earlier recorded waves)
 		local startWave = getCurrentWave()
 		onWaveChanged(startWave)
-
 		local actionsByWave = {}
 		for _, act in ipairs(table1.recordedActions) do
 			local w = act.wave or 0
@@ -464,7 +455,6 @@ do
 			table.insert(waves, w)
 		end
 		table.sort(waves)
-
 		task.spawn(function()
 			if table1.macroSettings.startupdelay and table1.macroSettings.startupdelay > 0 then
 				task.wait(table1.macroSettings.startupdelay)
@@ -542,11 +532,8 @@ do
 	-- 7 Macro Settings
 	-- 8 Macro Info
 
-	-- 1) Macro Selection
-	table1.macroSelectBound = false
 	table1.rebuildMacroSelection = function(force)
 		table1.getMacroList()
-		-- only create once; force rebuild only when requested
 		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then
 			return
 		end
@@ -599,7 +586,6 @@ do
 	end
 	table1.rebuildMacroSelection(true)
 
-	-- 2) Macro Configurations
 	table1.macroConfigActions, table1.macroConfigActionsChanged, table1.macroNameBox =
 		table1.maintoggle("Macro Configurations", "Save", "Load", "Delete", "Create", 1, table1.mainpage, true, 3, 1)
 	table1.macroConfigActions:SetAttribute("LayoutOrder", 2)
@@ -620,16 +606,24 @@ do
 			if name ~= "" then table1.loadMacro(name) end
 		elseif mode == 3 then
 			if name ~= "" then table1.deleteMacro(name) end
+			table1.rebuildMacroSelection(true)
+			if table1.rebuildMacroAutoloadSelect then
+				table1.rebuildMacroAutoloadSelect(true)
+			end
 		elseif mode == 4 then
-			if name ~= "" then table1.createMacro(name) end
+			if name ~= "" then
+				table1.createMacro(name)
+				table1.rebuildMacroSelection(true)
+				if table1.rebuildMacroAutoloadSelect then
+					table1.rebuildMacroAutoloadSelect(true)
+				end
+			end
 		end
-		table1.getMacroList()
 		if table1.refreshMacroInfo then
 			table1.refreshMacroInfo()
 		end
 	end)
 
-	-- 3) Macro Replay
 	table1.macroReplayToggle, table1.macroReplayChanged =
 		table1.maintoggle("Macro Replay", "Replay", "Stop", 1, table1.mainpage, true, 3, 0)
 	table1.macroReplayToggle:SetAttribute("LayoutOrder", 3)
@@ -650,7 +644,6 @@ do
 		end
 	end)
 
-	-- 4) Macro Record (REC action)
 	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
 		table1.maintoggle("Record Macro", "On", 1, table1.mainpage, true, 0, 0, 1)
 	do
@@ -686,7 +679,6 @@ do
 		end
 	end)
 
-	-- 5) Macro Autoload Target
 	table1.syncMacroAutoloadSelectionFromUI = function()
 		local name = ""
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
@@ -790,7 +782,6 @@ do
 	end
 	table1.rebuildMacroAutoloadSelect(true)
 
-	-- 6) Macro Autoload enable
 	table1.macroAutoloadEnable, table1.macroAutoloadEnableChanged =
 		table1.maintoggle("Macro Autoload", "On", 1, table1.mainpage, true, 0, 0)
 	table1.macroAutoloadEnable:SetAttribute("LayoutOrder", 6)
@@ -806,14 +797,15 @@ do
 	table1.macroAutoloadEnableChanged:Connect(function()
 		local mode = table1.macroAutoloadEnable:GetAttribute("Mode") or 0
 		table1.autoloadData.enabled = (mode == 1)
-		table1.syncMacroAutoloadSelectionFromUI()
+		if table1.syncMacroAutoloadSelectionFromUI then
+			table1.syncMacroAutoloadSelectionFromUI()
+		end
 		if table1.syncAutoloadSelectionFromUI then
 			table1.syncAutoloadSelectionFromUI()
 		end
 		table1.writeAutoload(table1.autoloadData)
 	end)
 
-	-- 7) Macro Settings — multiselect DROPDOWN (modeType 2)
 	table1.macroSettingsToggle, table1.macroSettingsChanged =
 		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
 	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 7)
@@ -846,112 +838,100 @@ do
 		end
 	end)
 
-	-- 8) Macro Info LAST
-	table1.macroInfoToggle, table1.macroInfoChanged =
-		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
+	-- Macro Info: unlocked textboxes, hide when folded
+	table1.macroInfoToggle, table1.macroInfoChanged,
+		table1.macroInfoWaveBox, table1.macroInfoTimeBox, table1.macroInfoMoneyBox,
+		table1.macroInfoNameBox2, table1.macroInfoStatusBox, table1.macroInfoLogBox =
+		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 6)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
-
-	table1.macroInfoLabel = Instance.new("TextLabel")
-	table1.macroInfoLabel.Name = "MacroInfoLabel"
-	table1.macroInfoLabel.BackgroundTransparency = 1
-	table1.macroInfoLabel.BorderSizePixel = 0
-	table1.macroInfoLabel.Size = UDim2.new(1, -12, 0, 120)
-	table1.macroInfoLabel.Position = UDim2.new(0, 6, 0, 56)
-	table1.macroInfoLabel.TextColor3 = table1.white
-	table1.macroInfoLabel.Font = table1.font
-	table1.macroInfoLabel.TextSize = 12
-	table1.macroInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
-	table1.macroInfoLabel.TextYAlignment = Enum.TextYAlignment.Top
-	table1.macroInfoLabel.TextWrapped = true
-	table1.macroInfoLabel.TextTruncate = Enum.TextTruncate.None
-	table1.macroInfoLabel.RichText = false
-	table1.macroInfoLabel.ZIndex = 20
-	table1.macroInfoLabel.Visible = true
-	table1.macroInfoLabel.Text = "Wave: -\nTime on wave: -\nMoney: -\nMacro: (none)\nActions: 0"
-	table1.macroInfoLabel.Parent = table1.macroInfoToggle
+	local infoBoxes = {
+		table1.macroInfoWaveBox,
+		table1.macroInfoTimeBox,
+		table1.macroInfoMoneyBox,
+		table1.macroInfoNameBox2,
+		table1.macroInfoStatusBox,
+		table1.macroInfoLogBox,
+	}
+	local placeholders = { "Wave", "Time on wave", "Money", "Macro name", "Status", "Action log" }
+	for i, box in ipairs(infoBoxes) do
+		if box then
+			pcall(function()
+				box:SetAttribute("Numberlocked", false)
+				box:SetAttribute("preventchange", true)
+			end)
+			box.PlaceholderText = placeholders[i]
+			box.Text = placeholders[i]
+			box.ClearTextOnFocus = false
+		end
+	end
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
 		if st then
-			st.normalHeight = 180
-			table1.macroInfoToggle:SetAttribute("LayoutHeight", 180)
-			table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 180)
-			table1.macroInfoToggle.ClipsDescendants = false
-			if st.folded then
-				st.folded = false
-				if st.fold then st.fold.Text = "-" end
+			st.normalHeight = 220
+			table1.macroInfoToggle:SetAttribute("LayoutHeight", 220)
+			if not st.folded then
+				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 220)
 			end
 		end
 	end
 
 	table1.refreshMacroInfo = function()
-		if not table1.macroInfoLabel then
-			return
-		end
-		if not table1.macroInfoLabel.Parent and table1.macroInfoToggle then
-			table1.macroInfoLabel.Parent = table1.macroInfoToggle
-		end
-		table1.macroInfoLabel.Visible = true
-		table1.macroInfoLabel.ZIndex = 20
 		local wave = getCurrentWave()
 		if not table1.waveStartTimes[wave] then
 			table1.waveStartTimes[wave] = os.clock()
 		end
-		local lines = {}
-		table.insert(lines, "Wave: " .. tostring(wave))
-		table.insert(lines, string.format("Time on wave: %.2fs", getTimeSinceWaveStart(wave)))
-		table.insert(lines, "Money: " .. tostring(getMoney()))
-		table.insert(lines, "Macro: " .. (table1.currentMacroName or "(temporary)"))
-		table.insert(lines, "Recording: " .. (table1.recording and "YES" or "no"))
-		table.insert(lines, "Replaying: " .. (table1.replaying and "YES" or "no"))
-		table.insert(lines, "Actions: " .. tostring(#table1.recordedActions))
-		table.insert(lines, "----------")
-		local byWave = {}
-		for _, act in ipairs(table1.recordedActions) do
-			byWave[act.wave] = byWave[act.wave] or {}
-			table.insert(byWave[act.wave], act)
-		end
-		local waves = {}
-		for w in pairs(byWave) do
-			table.insert(waves, w)
-		end
-		table.sort(waves)
-		for _, w in ipairs(waves) do
-			table.insert(lines, string.format("Wave %d:", w))
-			for _, act in ipairs(byWave[w]) do
-				table.insert(lines, string.format(
-					"  [%.2fs] %s  %s",
-					act.timeOffset or 0,
-					act.actionType,
-					tostring(act.unitName or act.unitId or "")
-				))
-			end
-		end
-		table1.macroInfoLabel.Text = table.concat(lines, "\n")
-		local labelH = math.max(40, #lines * 14 + 8)
-		table1.macroInfoLabel.Size = UDim2.new(1, -16, 0, labelH)
-		local totalH = 58 + labelH + 12
 		local st = table1.maintoggleState[table1.macroInfoToggle]
-		if st then
-			st.normalHeight = totalH
-			table1.macroInfoToggle:SetAttribute("LayoutHeight", totalH)
-			if not st.folded then
-				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
-			end
-			if st.relayout then
-				st.relayout()
+		local folded = st and st.folded
+		for _, box in ipairs(infoBoxes) do
+			if box then
+				box.Visible = not folded
 			end
 		end
-		if table1.mainpage and table1.mainpage:IsA("ScrollingFrame") then
-			local maxY = 0
-			for _, ch in ipairs(table1.mainpage:GetChildren()) do
-				if ch:IsA("GuiObject") and ch:GetAttribute("Maintoggle") then
-					local bottom = ch.Position.Y.Offset + ch.Size.Y.Offset
-					if bottom > maxY then
-						maxY = bottom
-					end
+		if folded then return end
+		if table1.macroInfoWaveBox then
+			table1.macroInfoWaveBox.Text = "Wave: " .. tostring(wave)
+		end
+		if table1.macroInfoTimeBox then
+			table1.macroInfoTimeBox.Text = string.format("Time on wave: %.2fs", getTimeSinceWaveStart(wave))
+		end
+		if table1.macroInfoMoneyBox then
+			table1.macroInfoMoneyBox.Text = "Money: " .. tostring(getMoney())
+		end
+		if table1.macroInfoNameBox2 then
+			table1.macroInfoNameBox2.Text = "Macro: " .. (table1.currentMacroName or "(temporary)")
+		end
+		if table1.macroInfoStatusBox then
+			table1.macroInfoStatusBox.Text = string.format(
+				"Rec:%s Replay:%s Actions:%d",
+				table1.recording and "ON" or "off",
+				table1.replaying and "ON" or "off",
+				#table1.recordedActions
+			)
+		end
+		if table1.macroInfoLogBox then
+			local lines = {}
+			local byWave = {}
+			for _, act in ipairs(table1.recordedActions) do
+				byWave[act.wave] = byWave[act.wave] or {}
+				table.insert(byWave[act.wave], act)
+			end
+			local waves = {}
+			for w in pairs(byWave) do
+				table.insert(waves, w)
+			end
+			table.sort(waves)
+			for _, w in ipairs(waves) do
+				table.insert(lines, "W" .. tostring(w))
+				for _, act in ipairs(byWave[w]) do
+					table.insert(lines, string.format(
+						"%.1f %s %s",
+						act.timeOffset or 0,
+						act.actionType,
+						tostring(act.unitName or act.unitId or "")
+					))
 				end
 			end
-			table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, math.max(maxY + 60, (table1.frameheight - 80) * 12))
+			table1.macroInfoLogBox.Text = (#lines > 0) and table.concat(lines, " | ") or "Action log (empty)"
 		end
 	end
 
@@ -965,13 +945,16 @@ do
 				local st = table1.maintoggleState[table1.macroInfoToggle]
 				if st and not st.folded then
 					table1.refreshMacroInfo()
+				else
+					for _, box in ipairs(infoBoxes) do
+						if box then box.Visible = false end
+					end
 				end
 			end
 			task.wait(0.5)
 		end
 	end)
 
-	-- macro autoload apply (does not recreate Settings autoload UI — base handles that)
 	task.spawn(function()
 		task.wait(1.2)
 		local data = table1.readAutoload()
@@ -979,30 +962,17 @@ do
 		if data.enabled ~= true then return end
 		local name = tostring(data.macroConfig or "")
 		if name == "" or name == "None" then return end
-		local ok = pcall(function()
-			table1.loadMacro(name)
-		end)
-		if ok then
+		if table1.loadMacro(name) then
 			if table1.macroNameBox then
 				table1.macroNameBox.Text = name
 			end
 			if table1.refreshMacroInfo then
 				table1.refreshMacroInfo()
 			end
-			if table1.rebuildMacroSelection then
-				pcall(table1.rebuildMacroSelection)
-			end
-			if table1.rebuildMacroAutoloadSelect then
-				pcall(table1.rebuildMacroAutoloadSelect)
-			end
 		end
 	end)
 
 	task.defer(function()
-		local any = table1.macroSelectMain or table1.macroRecordToggle
-		if any and table1.maintoggleState[any] and table1.maintoggleState[any].relayout then
-			table1.maintoggleState[any].relayout()
-		end
 		if table1.refreshMacroInfo then
 			table1.refreshMacroInfo()
 		end
