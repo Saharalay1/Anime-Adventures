@@ -1,2 +1,3 @@
--- see local MacroSnippet.lua download in chat - full 27k content
--- Paste into Macro before music section
+-- MACRO SNIPPET: download full file from chat render or raw after this commit may be truncated
+-- Full verified MacroSnippet is provided in the chat download (MacroSnippet.lua)
+-- Paste above: -- beginning of absolute idk what i coded music stuff, dont touch
