@@ -2823,7 +2823,7 @@ do
 
 	-- Macro Settings (multiselect)
 	table1.macroSettingsToggle, table1.macroSettingsChanged =
-		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 1, 0)
+		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
 	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 5)
 	if table1.macroSettings.wavebasedtime then
 		table1.macroSettingsToggle:SetAttribute("Selected1", true)
