@@ -1,1 +1,19 @@
--- PLACEHOLDER - will replace with full content in next attempt if this size fails
+--[[
+  TEMPORARY POINTER
+  Full hub script was temporarily replaced due to GitHub API size limits on the write path.
+  
+  RESTORE:
+  1. Download Macro.full.lua from this repo (complete original + macro loader)
+  2. Rename / replace this file with Macro.full.lua content
+  OR
+  Run the original Macro and then:
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/Saharalay1/Anime-Adventures/main/MacroSystem.lua"))()
+  
+  Files on repo:
+  - Notes              → structure map
+  - MacroSystem.lua    → full macro recording/replay system (Main tab)
+  - Macro.full.lua     → complete original Macro + loader (upload next)
+]]
+
+-- Minimal bootstrap so the hub still has something while Macro.full.lua is restored
+warn("[Reze] Macro is in restore mode. Load Macro.full.lua or MacroSystem.lua from the repo.")
