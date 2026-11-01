@@ -2170,7 +2170,6 @@ table1.selecttab(table1.mainbutton, table1.mainpage) -- main tab is open by defa
 -- ============================================================
 -- MACRO SYSTEM — paste right before:
 --   -- beginning of absolute idk what i coded music stuff, dont touch
--- Requires base hub (table1.mainpage, maintoggle, services, optional readAutoload/writeAutoload)
 -- ============================================================
 do
 	table1.macroSettings = table1.macroSettings or {
@@ -2272,7 +2271,6 @@ do
 		return configs
 	end
 
-	-- reuse base autoload helpers when present
 	if not table1.autoloadPath then
 		table1.autoloadPath = function()
 			if not isfolder(table1.folder1) then makefolder(table1.folder1) end
@@ -2348,44 +2346,60 @@ do
 		end)
 	end)
 
-	pcall(function()
-		local mt = getrawmetatable(game)
-		local oldNamecall = mt.__namecall
-		setreadonly(mt, false)
-		mt.__namecall = newcclosure(function(self, ...)
+	-- read-only remote log: never block or replace the original call
+	local function safeCopyArgs(args)
+		local out = {}
+		for i = 1, #args do
+			local v = args[i]
+			local t = typeof(v)
+			if t == "table" then
+				local ok, copied = pcall(deepCopy, v)
+				out[i] = ok and copied or v
+			else
+				out[i] = v
+			end
+		end
+		return out
+	end
+
+	if type(hookmetamethod) == "function" then
+		local oldNamecall
+		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
-			local args = { ... }
-			if (method == "FireServer" or method == "InvokeServer")
-				and typeof(self) == "Instance"
-				and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction"))
-				and not self:IsA("UnreliableRemoteEvent")
-			then
-				local remoteName = self.Name
-				if ACTION_REMOTES[remoteName] and table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
-					local wave = getCurrentWave()
-					local entry = {
-						wave = wave,
-						timeOffset = getTimeSinceWaveStart(wave),
-						actionType = remoteName,
-						method = method,
-						args = deepCopy(args),
-						unitName = nil,
-						unitId = args[1],
-						remotePath = self:GetFullName(),
-						moneyAtTime = getMoney(),
-						timestamp = os.clock(),
-					}
-					table.insert(table1.recordedActions, entry)
-					if remoteName == "spawn_unit" then
-						table1.lastPlaceArgs = args
-						table1.lastPlaceTime = os.clock()
-					end
+			-- always forward first-path: log only when recording, fully protected
+			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
+				if method == "FireServer" or method == "InvokeServer" then
+					pcall(function()
+						if typeof(self) ~= "Instance" then return end
+						if self:IsA("UnreliableRemoteEvent") then return end
+						if not (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then return end
+						local remoteName = self.Name
+						if not ACTION_REMOTES[remoteName] then return end
+						local args = { ... }
+						local wave = getCurrentWave()
+						local entry = {
+							wave = wave,
+							timeOffset = getTimeSinceWaveStart(wave),
+							actionType = remoteName,
+							method = method,
+							args = safeCopyArgs(args),
+							unitName = nil,
+							unitId = args[1],
+							remotePath = self:GetFullName(),
+							moneyAtTime = getMoney(),
+							timestamp = os.clock(),
+						}
+						table.insert(table1.recordedActions, entry)
+						if remoteName == "spawn_unit" then
+							table1.lastPlaceArgs = args
+							table1.lastPlaceTime = os.clock()
+						end
+					end)
 				end
 			end
 			return oldNamecall(self, ...)
-		end)
-		setreadonly(mt, true)
-	end)
+		end))
+	end
 
 	function table1.clearTemporaryMacro()
 		table1.recordedActions = {}
@@ -2586,11 +2600,17 @@ do
 			end
 		end
 
+		-- always start from the live current wave (skip earlier recorded waves)
+		local startWave = getCurrentWave()
+		onWaveChanged(startWave)
+
 		local actionsByWave = {}
 		for _, act in ipairs(table1.recordedActions) do
 			local w = act.wave or 0
-			actionsByWave[w] = actionsByWave[w] or {}
-			table.insert(actionsByWave[w], act)
+			if w >= startWave then
+				actionsByWave[w] = actionsByWave[w] or {}
+				table.insert(actionsByWave[w], act)
+			end
 		end
 		local waves = {}
 		for w in pairs(actionsByWave) do
@@ -2665,47 +2685,17 @@ do
 		table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, (table1.frameheight - 80) * 20)
 	end
 
-	-- Record Macro (action button REC)
-	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
-		table1.maintoggle("Record Macro", "On", 1, table1.mainpage, true, 0, 0, 1)
-	do
-		local st = table1.maintoggleState[table1.macroRecordToggle]
-		if st then
-			st.actiontext = "REC"
-			if st.actiontextbox then
-				st.actiontextbox.Text = "REC"
-			end
-			table1.macroRecordToggle:SetAttribute("LayoutOrder", 1)
-		end
-	end
-	if table1.macroRecordAction then
-		table1.macroRecordAction:Connect(function()
-			table1.toggleRecording()
-			local st = table1.maintoggleState[table1.macroRecordToggle]
-			if st then
-				local newMode = table1.recording and 1 or 0
-				table1.macroRecordToggle:SetAttribute("Mode", newMode)
-				st.currentmode = newMode
-				st.lastMode = newMode
-				if st.setoutline then
-					st.setoutline(newMode, false)
-				end
-				if st.modechanged then
-					st.modechanged:Fire(newMode)
-				end
-			end
-		end)
-	end
-	table1.macroRecordChanged:Connect(function()
-		local mode = table1.macroRecordToggle:GetAttribute("Mode") or 0
-		if mode == 1 and not table1.recording then
-			table1.startRecording()
-		elseif mode == 0 and table1.recording then
-			table1.stopRecording()
-		end
-	end)
+	-- ORDER:
+	-- 1 Macro Selection
+	-- 2 Macro Configurations
+	-- 3 Macro Replay
+	-- 4 Macro Record
+	-- 5 Macro Autoload Target
+	-- 6 Macro Autoload
+	-- 7 Macro Settings
+	-- 8 Macro Info
 
-	-- Macro Selection (singular dropdown)
+	-- 1) Macro Selection
 	table1.rebuildMacroSelection = function()
 		local savedOrder, savedPos
 		if table1.macroSelectMain and table1.macroSelectMain.Parent then
@@ -2728,17 +2718,14 @@ do
 		table.insert(args, 4)
 		table.insert(args, 0)
 		table1.macroSelectMain, table1.macroSelectChanged = table1.maintoggle(table.unpack(args))
-		table1.macroSelectMain:SetAttribute("LayoutOrder", savedOrder or 2)
+		table1.macroSelectMain:SetAttribute("LayoutOrder", savedOrder or 1)
 		if savedPos then
 			table1.macroSelectMain.Position = savedPos
 		end
 		table1.macroSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
-			local name = nil
-			if #table1.macrolistnames == 0 then
-				return
-			end
-			name = table1.macrolistnames[mode]
+			if #table1.macrolistnames == 0 then return end
+			local name = table1.macrolistnames[mode]
 			local st = table1.maintoggleState[table1.macroSelectMain]
 			if st and st.dropdownButtons and st.dropdownButtons[mode] then
 				local t = st.dropdownButtons[mode].Text
@@ -2759,10 +2746,10 @@ do
 	end
 	table1.rebuildMacroSelection()
 
-	-- Macro Configurations (Save / Load / Delete / Create + name)
+	-- 2) Macro Configurations
 	table1.macroConfigActions, table1.macroConfigActionsChanged, table1.macroNameBox =
 		table1.maintoggle("Macro Configurations", "Save", "Load", "Delete", "Create", 1, table1.mainpage, true, 3, 1)
-	table1.macroConfigActions:SetAttribute("LayoutOrder", 3)
+	table1.macroConfigActions:SetAttribute("LayoutOrder", 2)
 	if table1.macroNameBox then
 		table1.macroNameBox.Text = ""
 		table1.macroNameBox.PlaceholderText = "Macro Name"
@@ -2775,21 +2762,13 @@ do
 		local name = table1.macroNameBox and table1.macroNameBox.Text or ""
 		name = name:gsub("^%s+", ""):gsub("%s+$", "")
 		if mode == 1 then
-			if name ~= "" then
-				table1.saveMacro(name)
-			end
+			if name ~= "" then table1.saveMacro(name) end
 		elseif mode == 2 then
-			if name ~= "" then
-				table1.loadMacro(name)
-			end
+			if name ~= "" then table1.loadMacro(name) end
 		elseif mode == 3 then
-			if name ~= "" then
-				table1.deleteMacro(name)
-			end
+			if name ~= "" then table1.deleteMacro(name) end
 		elseif mode == 4 then
-			if name ~= "" then
-				table1.createMacro(name)
-			end
+			if name ~= "" then table1.createMacro(name) end
 		end
 		table1.rebuildMacroSelection()
 		if table1.rebuildMacroAutoloadSelect then
@@ -2800,10 +2779,10 @@ do
 		end
 	end)
 
-	-- Macro Replay (Replay / Stop)
+	-- 3) Macro Replay
 	table1.macroReplayToggle, table1.macroReplayChanged =
 		table1.maintoggle("Macro Replay", "Replay", "Stop", 1, table1.mainpage, true, 3, 0)
-	table1.macroReplayToggle:SetAttribute("LayoutOrder", 4)
+	table1.macroReplayToggle:SetAttribute("LayoutOrder", 3)
 	table1.macroReplayChanged:Connect(function(mode)
 		if mode == 1 then
 			local name = table1.macroNameBox and table1.macroNameBox.Text or ""
@@ -2821,30 +2800,43 @@ do
 		end
 	end)
 
-	-- Macro Settings (multiselect)
-	table1.macroSettingsToggle, table1.macroSettingsChanged =
-		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
-	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 5)
-	if table1.macroSettings.wavebasedtime then
-		table1.macroSettingsToggle:SetAttribute("Selected1", true)
+	-- 4) Macro Record (REC action)
+	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
+		table1.maintoggle("Record Macro", "On", 1, table1.mainpage, true, 0, 0, 1)
+	do
+		local st = table1.maintoggleState[table1.macroRecordToggle]
+		if st then
+			st.actiontext = "REC"
+			if st.actiontextbox then
+				st.actiontextbox.Text = "REC"
+			end
+			table1.macroRecordToggle:SetAttribute("LayoutOrder", 4)
+		end
 	end
-	if table1.macroSettings.autovotestart then
-		table1.macroSettingsToggle:SetAttribute("Selected2", true)
+	if table1.macroRecordAction then
+		table1.macroRecordAction:Connect(function()
+			table1.toggleRecording()
+			local st = table1.maintoggleState[table1.macroRecordToggle]
+			if st then
+				local newMode = table1.recording and 1 or 0
+				table1.macroRecordToggle:SetAttribute("Mode", newMode)
+				st.currentmode = newMode
+				st.lastMode = newMode
+				if st.setoutline then st.setoutline(newMode, false) end
+				if st.modechanged then st.modechanged:Fire(newMode) end
+			end
+		end)
 	end
-	if table1.macroSettings.skipfailuresandmoveontothenextwave then
-		table1.macroSettingsToggle:SetAttribute("Selected3", true)
-	end
-	table1.macroSettingsChanged:Connect(function(idx, selected)
-		if idx == 1 then
-			table1.macroSettings.wavebasedtime = selected == true
-		elseif idx == 2 then
-			table1.macroSettings.autovotestart = selected == true
-		elseif idx == 3 then
-			table1.macroSettings.skipfailuresandmoveontothenextwave = selected == true
+	table1.macroRecordChanged:Connect(function()
+		local mode = table1.macroRecordToggle:GetAttribute("Mode") or 0
+		if mode == 1 and not table1.recording then
+			table1.startRecording()
+		elseif mode == 0 and table1.recording then
+			table1.stopRecording()
 		end
 	end)
 
-	-- Macro Autoload Target + Enable (shared autoload.json)
+	-- 5) Macro Autoload Target
 	table1.syncMacroAutoloadSelectionFromUI = function()
 		local name = ""
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
@@ -2888,7 +2880,7 @@ do
 		table.insert(args, 4)
 		table.insert(args, 0)
 		table1.macroAutoloadSelect, table1.macroAutoloadSelectChanged = table1.maintoggle(table.unpack(args))
-		table1.macroAutoloadSelect:SetAttribute("LayoutOrder", savedOrder or 6)
+		table1.macroAutoloadSelect:SetAttribute("LayoutOrder", savedOrder or 5)
 		if savedPos then
 			table1.macroAutoloadSelect.Position = savedPos
 		end
@@ -2945,18 +2937,17 @@ do
 	end
 	table1.rebuildMacroAutoloadSelect()
 
+	-- 6) Macro Autoload enable
 	table1.macroAutoloadEnable, table1.macroAutoloadEnableChanged =
 		table1.maintoggle("Macro Autoload", "On", 1, table1.mainpage, true, 0, 0)
-	table1.macroAutoloadEnable:SetAttribute("LayoutOrder", 7)
+	table1.macroAutoloadEnable:SetAttribute("LayoutOrder", 6)
 	if table1.autoloadData.enabled then
 		table1.macroAutoloadEnable:SetAttribute("Mode", 1)
 		local st = table1.maintoggleState[table1.macroAutoloadEnable]
 		if st then
 			st.currentmode = 1
 			st.lastMode = 1
-			if st.setoutline then
-				st.setoutline(1, false)
-			end
+			if st.setoutline then st.setoutline(1, false) end
 		end
 	end
 	table1.macroAutoloadEnableChanged:Connect(function()
@@ -2969,10 +2960,43 @@ do
 		table1.writeAutoload(table1.autoloadData)
 	end)
 
-	-- Macro Info LAST — expands with content, text below Refresh
+	-- 7) Macro Settings — multiselect DROPDOWN (modeType 2)
+	table1.macroSettingsToggle, table1.macroSettingsChanged =
+		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
+	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 7)
+	do
+		local st = table1.maintoggleState[table1.macroSettingsToggle]
+		local function setSel(i, on)
+			table1.macroSettingsToggle:SetAttribute("Selected" .. i, on == true)
+			if st and st.selectedModes then
+				st.selectedModes[i] = on == true
+			end
+			if st and st.dropdownButtons and st.dropdownButtons[i] then
+				st.dropdownButtons[i].BackgroundColor3 = on and table1.selectedtabcolor or table1.tabinactive
+				st.dropdownButtons[i].BackgroundTransparency = on and 0 or 0.15
+			end
+		end
+		setSel(1, table1.macroSettings.wavebasedtime)
+		setSel(2, table1.macroSettings.autovotestart)
+		setSel(3, table1.macroSettings.skipfailuresandmoveontothenextwave)
+		if st and st.updateDropdownText then
+			st.updateDropdownText()
+		end
+	end
+	table1.macroSettingsChanged:Connect(function(idx, selected)
+		if idx == 1 then
+			table1.macroSettings.wavebasedtime = selected == true
+		elseif idx == 2 then
+			table1.macroSettings.autovotestart = selected == true
+		elseif idx == 3 then
+			table1.macroSettings.skipfailuresandmoveontothenextwave = selected == true
+		end
+	end)
+
+	-- 8) Macro Info LAST
 	table1.macroInfoToggle, table1.macroInfoChanged =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
-	table1.macroInfoToggle:SetAttribute("LayoutOrder", 99)
+	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
 
 	table1.macroInfoLabel = Instance.new("TextLabel")
 	table1.macroInfoLabel.Name = "MacroInfoLabel"
@@ -2986,17 +3010,21 @@ do
 	table1.macroInfoLabel.TextYAlignment = Enum.TextYAlignment.Top
 	table1.macroInfoLabel.TextWrapped = true
 	table1.macroInfoLabel.ZIndex = 5
-	table1.macroInfoLabel.Text = "Wave: -\nMoney: -\nTime on wave: -\nMacro: (none)\nActions: 0"
+	table1.macroInfoLabel.Text = "Wave: -\nTime on wave: -\nMoney: -\nMacro: (none)\nActions: 0"
 	table1.macroInfoLabel.Parent = table1.macroInfoToggle
 
 	table1.refreshMacroInfo = function()
 		if not table1.macroInfoLabel or not table1.macroInfoLabel.Parent then
 			return
 		end
+		local wave = getCurrentWave()
+		if not table1.waveStartTimes[wave] then
+			table1.waveStartTimes[wave] = os.clock()
+		end
 		local lines = {}
-		table.insert(lines, "Wave: " .. tostring(getCurrentWave()))
+		table.insert(lines, "Wave: " .. tostring(wave))
+		table.insert(lines, string.format("Time on wave: %.2fs", getTimeSinceWaveStart(wave)))
 		table.insert(lines, "Money: " .. tostring(getMoney()))
-		table.insert(lines, string.format("Time on wave: %.2fs", getTimeSinceWaveStart(getCurrentWave())))
 		table.insert(lines, "Macro: " .. (table1.currentMacroName or "(temporary)"))
 		table.insert(lines, "Recording: " .. (table1.recording and "YES" or "no"))
 		table.insert(lines, "Replaying: " .. (table1.replaying and "YES" or "no"))
@@ -3068,18 +3096,14 @@ do
 		end
 	end)
 
-	-- apply macro autoload after UI is up (shared enabled flag with reze)
+	-- macro autoload apply (does not recreate Settings autoload UI — base handles that)
 	task.spawn(function()
 		task.wait(1.2)
 		local data = table1.readAutoload()
 		table1.autoloadData = data
-		if data.enabled ~= true then
-			return
-		end
+		if data.enabled ~= true then return end
 		local name = tostring(data.macroConfig or "")
-		if name == "" or name == "None" then
-			return
-		end
+		if name == "" or name == "None" then return end
 		local ok = pcall(function()
 			table1.loadMacro(name)
 		end)
@@ -3100,7 +3124,7 @@ do
 	end)
 
 	task.defer(function()
-		local any = table1.macroRecordToggle
+		local any = table1.macroSelectMain or table1.macroRecordToggle
 		if any and table1.maintoggleState[any] and table1.maintoggleState[any].relayout then
 			table1.maintoggleState[any].relayout()
 		end
