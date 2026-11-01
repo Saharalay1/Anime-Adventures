@@ -3008,39 +3008,68 @@ do
 		end
 	end)
 
-	-- Macro Info: unlocked textboxes, hide when folded
-	table1.macroInfoToggle, table1.macroInfoChanged,
-		table1.macroInfoWaveBox, table1.macroInfoTimeBox, table1.macroInfoMoneyBox,
-		table1.macroInfoNameBox2, table1.macroInfoStatusBox, table1.macroInfoLogBox =
-		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 6)
+	-- Macro Info: 1 Refresh + manually placed textboxes (all visible when expanded)
+	table1.macroInfoToggle, table1.macroInfoChanged =
+		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
-	local infoBoxes = {
-		table1.macroInfoWaveBox,
-		table1.macroInfoTimeBox,
-		table1.macroInfoMoneyBox,
-		table1.macroInfoNameBox2,
-		table1.macroInfoStatusBox,
-		table1.macroInfoLogBox,
-	}
-	local placeholders = { "Wave", "Time on wave", "Money", "Macro name", "Status", "Action log" }
-	for i, box in ipairs(infoBoxes) do
-		if box then
-			pcall(function()
-				box:SetAttribute("Numberlocked", false)
-				box:SetAttribute("preventchange", true)
-			end)
-			box.PlaceholderText = placeholders[i]
-			box.Text = placeholders[i]
-			box.ClearTextOnFocus = false
-		end
+	table1.macroInfoToggle.ClipsDescendants = false
+
+	local function makeInfoBox(name, y)
+		local box = Instance.new("TextBox")
+		box.Name = name
+		box.Size = UDim2.new(1, -12, 0, 22)
+		box.Position = UDim2.new(0, 6, 0, y)
+		box.BackgroundColor3 = table1.tabinactive
+		box.BackgroundTransparency = 0.35
+		box.BorderSizePixel = 0
+		box.TextColor3 = table1.white
+		box.Font = table1.font
+		box.TextSize = 12
+		box.TextXAlignment = Enum.TextXAlignment.Left
+		box.ClearTextOnFocus = false
+		box.TextEditable = false
+		box.ZIndex = 15
+		box.Visible = true
+		box.Parent = table1.macroInfoToggle
+		pcall(function()
+			box:SetAttribute("Numberlocked", false)
+			box:SetAttribute("preventchange", true)
+		end)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 4)
+		c.Parent = box
+		return box
 	end
+
+	-- stacked so every line is on-screen (header ~28, refresh row ~26, then boxes)
+	table1.macroInfoWaveBox = makeInfoBox("MacroInfoWave", 56)
+	table1.macroInfoTimeBox = makeInfoBox("MacroInfoTime", 80)
+	table1.macroInfoMoneyBox = makeInfoBox("MacroInfoMoney", 104)
+	table1.macroInfoNameBox2 = makeInfoBox("MacroInfoName", 128)
+	table1.macroInfoStatusBox = makeInfoBox("MacroInfoStatus", 152)
+	table1.macroInfoLogBox = makeInfoBox("MacroInfoLog", 176)
+	table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, 48)
+	table1.macroInfoLogBox.TextWrapped = true
+	table1.macroInfoLogBox.TextYAlignment = Enum.TextYAlignment.Top
+
+	table1.macroInfoWaveBox.Text = "Wave: -"
+	table1.macroInfoTimeBox.Text = "Time on wave: -"
+	table1.macroInfoMoneyBox.Text = "Money: -"
+	table1.macroInfoNameBox2.Text = "Macro: (temporary)"
+	table1.macroInfoStatusBox.Text = "Rec:off Replay:off Actions:0"
+	table1.macroInfoLogBox.Text = "Action log (empty)"
+
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
+		local totalH = 176 + 48 + 10
 		if st then
-			st.normalHeight = 220
-			table1.macroInfoToggle:SetAttribute("LayoutHeight", 220)
+			st.normalHeight = totalH
+			table1.macroInfoToggle:SetAttribute("LayoutHeight", totalH)
 			if not st.folded then
-				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 220)
+				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
+			end
+			if st.relayout then
+				st.relayout()
 			end
 		end
 	end
@@ -3051,13 +3080,23 @@ do
 			table1.waveStartTimes[wave] = os.clock()
 		end
 		local st = table1.maintoggleState[table1.macroInfoToggle]
-		local folded = st and st.folded
-		for _, box in ipairs(infoBoxes) do
+		local folded = st and st.folded == true
+		local boxes = {
+			table1.macroInfoWaveBox,
+			table1.macroInfoTimeBox,
+			table1.macroInfoMoneyBox,
+			table1.macroInfoNameBox2,
+			table1.macroInfoStatusBox,
+			table1.macroInfoLogBox,
+		}
+		for _, box in ipairs(boxes) do
 			if box then
 				box.Visible = not folded
 			end
 		end
-		if folded then return end
+		if folded then
+			return
+		end
 		if table1.macroInfoWaveBox then
 			table1.macroInfoWaveBox.Text = "Wave: " .. tostring(wave)
 		end
@@ -3091,17 +3130,41 @@ do
 			end
 			table.sort(waves)
 			for _, w in ipairs(waves) do
-				table.insert(lines, "W" .. tostring(w))
+				table.insert(lines, "W" .. tostring(w) .. ":")
 				for _, act in ipairs(byWave[w]) do
 					table.insert(lines, string.format(
-						"%.1f %s %s",
+						"  [%.2fs] %s %s",
 						act.timeOffset or 0,
 						act.actionType,
 						tostring(act.unitName or act.unitId or "")
 					))
 				end
 			end
-			table1.macroInfoLogBox.Text = (#lines > 0) and table.concat(lines, " | ") or "Action log (empty)"
+			local logText = (#lines > 0) and table.concat(lines, "\n") or "Action log (empty)"
+			table1.macroInfoLogBox.Text = logText
+			local logH = math.max(48, math.min(200, (#lines + 1) * 14))
+			table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, logH)
+			local totalH = 176 + logH + 10
+			if st then
+				st.normalHeight = totalH
+				table1.macroInfoToggle:SetAttribute("LayoutHeight", totalH)
+				if not st.folded then
+					table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
+				end
+				if st.relayout then
+					st.relayout()
+				end
+			end
+			if table1.mainpage and table1.mainpage:IsA("ScrollingFrame") then
+				local maxY = 0
+				for _, ch in ipairs(table1.mainpage:GetChildren()) do
+					if ch:IsA("GuiObject") and ch:GetAttribute("Maintoggle") then
+						local bottom = ch.Position.Y.Offset + ch.Size.Y.Offset
+						if bottom > maxY then maxY = bottom end
+					end
+				end
+				table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, math.max(maxY + 80, (table1.frameheight - 80) * 12))
+			end
 		end
 	end
 
@@ -3112,14 +3175,7 @@ do
 	task.spawn(function()
 		while table1.maingui and table1.maingui.Parent do
 			if table1.macroInfoToggle and table1.macroInfoToggle.Parent then
-				local st = table1.maintoggleState[table1.macroInfoToggle]
-				if st and not st.folded then
-					table1.refreshMacroInfo()
-				else
-					for _, box in ipairs(infoBoxes) do
-						if box then box.Visible = false end
-					end
-				end
+				table1.refreshMacroInfo()
 			end
 			task.wait(0.5)
 		end
@@ -3151,6 +3207,7 @@ end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
+
 
 
 -- beginning of absolute idk what i coded music stuff, dont touch 
