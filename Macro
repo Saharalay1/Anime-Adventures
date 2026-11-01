@@ -2181,7 +2181,6 @@ do
 		spaminterval = 0.05,
 		maxspamattempts = 200,
 	}
-
 	table1.recording = false
 	table1.replaying = false
 	table1.currentMacroName = nil
@@ -2192,32 +2191,40 @@ do
 	table1.lastPlaceTime = 0
 	table1.macroIgnoreReplay = false
 	table1.macrolistnames = {}
+	table1.macroendpoints = nil
+	table1.macrounitsfolder = nil
+	table1.macrowavevalue = nil
 
-	local endpoints, unitsFolder, waveValue = nil, nil, nil
-
-	local function safeGetEndpoints()
-		if endpoints and endpoints.Parent then return endpoints end
-		local ok, rs = pcall(function() return game:GetService("ReplicatedStorage") end)
-		if not ok or not rs then return nil end
+	table1.macrosafegetendpoints = function()
+		if table1.macroendpoints and table1.macroendpoints.Parent then
+			return table1.macroendpoints
+		end
+		local rs = game:GetService("ReplicatedStorage")
 		local e = rs:FindFirstChild("endpoints")
-		if e then e = e:FindFirstChild("client_to_server") end
-		endpoints = e
-		return endpoints
+		if e then
+			e = e:FindFirstChild("client_to_server")
+		end
+		table1.macroendpoints = e
+		return table1.macroendpoints
 	end
 
-	local function safeGetUnits()
-		if unitsFolder and unitsFolder.Parent then return unitsFolder end
-		unitsFolder = table1.Workspace:FindFirstChild("_UNITS")
-		return unitsFolder
+	table1.macrosafegetunits = function()
+		if table1.macrounitsfolder and table1.macrounitsfolder.Parent then
+			return table1.macrounitsfolder
+		end
+		table1.macrounitsfolder = table1.Workspace:FindFirstChild("_UNITS")
+		return table1.macrounitsfolder
 	end
 
-	local function safeGetWave()
-		if waveValue and waveValue.Parent then return waveValue end
-		waveValue = table1.Workspace:FindFirstChild("_wave_num")
-		return waveValue
+	table1.macrosafegetwave = function()
+		if table1.macrowavevalue and table1.macrowavevalue.Parent then
+			return table1.macrowavevalue
+		end
+		table1.macrowavevalue = table1.Workspace:FindFirstChild("_wave_num")
+		return table1.macrowavevalue
 	end
 
-	local ACTION_REMOTES = {
+	table1.macroactionremotes = {
 		spawn_unit = true,
 		upgrade_unit_ingame = true,
 		sell_unit_ingame = true,
@@ -2226,90 +2233,112 @@ do
 		vote_start = true,
 	}
 
-	local function deepCopy(t)
-		if type(t) ~= "table" then return t end
+	table1.macrodeepcopy = function(t)
+		if type(t) ~= "table" then
+			return t
+		end
 		local n = {}
 		for k, v in pairs(t) do
-			n[k] = deepCopy(v)
+			n[k] = table1.macrodeepcopy(v)
 		end
 		return n
 	end
 
-	local function getMoney()
-		local ok, gui = pcall(function()
-			return table1.player.PlayerGui.spawn_units.Lives.Frame.Resource.Money
-		end)
-		if not ok or not gui then return 0 end
-		local text = gui.Text or tostring(gui.Value or "0")
+	table1.macrogetmoney = function()
+		local pg = table1.player and table1.player:FindFirstChild("PlayerGui")
+		if not pg then
+			return 0
+		end
+		local su = pg:FindFirstChild("spawn_units")
+		if not su then
+			return 0
+		end
+		local lives = su:FindFirstChild("Lives")
+		if not lives then
+			return 0
+		end
+		local frame = lives:FindFirstChild("Frame")
+		if not frame then
+			return 0
+		end
+		local resource = frame:FindFirstChild("Resource")
+		if not resource then
+			return 0
+		end
+		local money = resource:FindFirstChild("Money")
+		if not money then
+			return 0
+		end
+		local text = money.Text or tostring(money.Value or "0")
 		return tonumber((tostring(text):gsub("%D", ""))) or 0
 	end
 
-	local function getCurrentWave()
-		local w = safeGetWave()
+	table1.macrogetcurrentwave = function()
+		local w = table1.macrosafegetwave()
 		return (w and w.Value) or 0
 	end
 
-	local function getTimeSinceWaveStart(wave)
+	table1.macrogettimesincewavestart = function(wave)
 		local start = table1.waveStartTimes[wave]
-		if not start then return 0 end
+		if not start then
+			return 0
+		end
 		return os.clock() - start
 	end
 
-	local function ensureMacroFolder()
-		local femboy = table1.Workspace:FindFirstChild("FEMBOY")
-		if not femboy then
-			femboy = Instance.new("Folder")
-			femboy.Name = "FEMBOY"
-			femboy.Parent = table1.Workspace
+	table1.macroensurefolder = function()
+		if not isfolder(table1.folder1) then
+			makefolder(table1.folder1)
 		end
-		local configs = femboy:FindFirstChild("macroconfigs")
-		if not configs then
-			configs = Instance.new("Folder")
-			configs.Name = "macroconfigs"
-			configs.Parent = femboy
+		local path = table1.folder1 .. "/macroconfigs"
+		if not isfolder(path) then
+			makefolder(path)
 		end
-		return configs
+		return path
 	end
 
 	if not table1.autoloadPath then
 		table1.autoloadPath = function()
-			if not isfolder(table1.folder1) then makefolder(table1.folder1) end
+			if not isfolder(table1.folder1) then
+				makefolder(table1.folder1)
+			end
 			return table1.folder1 .. "/autoload.json"
 		end
 	end
+
 	if not table1.readAutoload then
 		table1.readAutoload = function()
 			local data = { enabled = false, rezeConfig = "", macroConfig = "" }
 			local path = table1.autoloadPath()
 			if isfile and isfile(path) then
-				local ok, decoded = pcall(function()
-					return table1.HttpService:JSONDecode(readfile(path))
-				end)
-				if ok and type(decoded) == "table" then
-					data.enabled = decoded.enabled == true
-					data.rezeConfig = tostring(decoded.rezeConfig or "")
-					data.macroConfig = tostring(decoded.macroConfig or "")
+				local raw = readfile(path)
+				if type(raw) == "string" and string.sub(string.gsub(raw, "^%s+", ""), 1, 1) == "{" then
+					local decoded = table1.HttpService:JSONDecode(raw)
+					if type(decoded) == "table" then
+						data.enabled = decoded.enabled == true
+						data.rezeConfig = tostring(decoded.rezeConfig or "")
+						data.macroConfig = tostring(decoded.macroConfig or "")
+					end
 				end
 			end
 			return data
 		end
 	end
+
 	if not table1.writeAutoload then
 		table1.writeAutoload = function(data)
 			local path = table1.autoloadPath()
-			pcall(function()
-				writefile(path, table1.HttpService:JSONEncode({
-					enabled = data.enabled == true,
-					rezeConfig = tostring(data.rezeConfig or ""),
-					macroConfig = tostring(data.macroConfig or ""),
-				}))
-			end)
+			writefile(path, table1.HttpService:JSONEncode({
+				enabled = data.enabled == true,
+				rezeConfig = tostring(data.rezeConfig or ""),
+				macroConfig = tostring(data.macroConfig or ""),
+			}))
 		end
 	end
 
 	table1.autoloadData = table1.autoloadData or table1.readAutoload()
 
-	local function onWaveChanged(newWave)
+	table1.macroonwavechanged = function(newWave)
 		table1.currentWave = newWave
 		if not table1.waveStartTimes[newWave] then
 			table1.waveStartTimes[newWave] = os.clock()
@@ -2317,22 +2346,30 @@ do
 	end
 
 	task.spawn(function()
-		local w = safeGetWave()
+		local w = table1.macrosafegetwave()
 		if w then
-			onWaveChanged(w.Value)
+			table1.macroonwavechanged(w.Value)
 			w.Changed:Connect(function(nv)
-				onWaveChanged(nv)
+				table1.macroonwavechanged(nv)
 			end)
 		end
 	end)
 
 	task.spawn(function()
-		local uf = safeGetUnits()
-		if not uf then return end
+		local uf = table1.macrosafegetunits()
+		if not uf then
+			return
+		end
 		uf.ChildAdded:Connect(function(child)
-			if not table1.recording then return end
-			if not table1.lastPlaceArgs then return end
-			if os.clock() - table1.lastPlaceTime > 1.5 then return end
+			if not table1.recording then
+				return
+			end
+			if not table1.lastPlaceArgs then
+				return
+			end
+			if os.clock() - table1.lastPlaceTime > 1.5 then
+				return
+			end
 			local unitName = child.Name
 			for i = #table1.recordedActions, 1, -1 do
 				local act = table1.recordedActions[i]
@@ -2346,15 +2383,12 @@ do
 		end)
 	end)
 
-	-- read-only remote log: never block or replace the original call
-	local function safeCopyArgs(args)
+	table1.macrosafecopyargs = function(args)
 		local out = {}
 		for i = 1, #args do
 			local v = args[i]
-			local t = typeof(v)
-			if t == "table" then
-				local ok, copied = pcall(deepCopy, v)
-				out[i] = ok and copied or v
+			if type(v) == "table" then
+				out[i] = table1.macrodeepcopy(v)
 			else
 				out[i] = v
 			end
@@ -2366,60 +2400,65 @@ do
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
-			local args = { ... }
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
 				if method == "FireServer" or method == "InvokeServer" then
-					pcall(function()
-						if typeof(self) ~= "Instance" then return end
-						if self:IsA("UnreliableRemoteEvent") then return end
-						if not (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then return end
+					if typeof(self) == "Instance"
+						and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction"))
+						and not self:IsA("UnreliableRemoteEvent")
+					then
 						local remoteName = self.Name
-						if not ACTION_REMOTES[remoteName] then return end
-						local wave = getCurrentWave()
-						local entry = {
-							wave = wave,
-							timeOffset = getTimeSinceWaveStart(wave),
-							actionType = remoteName,
-							method = method,
-							args = safeCopyArgs(args),
-							unitName = nil,
-							unitId = args[1],
-							remotePath = self:GetFullName(),
-							moneyAtTime = getMoney(),
-							timestamp = os.clock(),
-						}
-						table.insert(table1.recordedActions, entry)
-						if remoteName == "spawn_unit" then
-							table1.lastPlaceArgs = args
-							table1.lastPlaceTime = os.clock()
+						if table1.macroactionremotes[remoteName] then
+							local args = { ... }
+							local wave = table1.macrogetcurrentwave()
+							local entry = {
+								wave = wave,
+								timeOffset = table1.macrogettimesincewavestart(wave),
+								actionType = remoteName,
+								method = method,
+								args = table1.macrosafecopyargs(args),
+								unitName = nil,
+								unitId = args[1],
+								remotePath = self:GetFullName(),
+								moneyAtTime = table1.macrogetmoney(),
+								timestamp = os.clock(),
+							}
+							table.insert(table1.recordedActions, entry)
+							if remoteName == "spawn_unit" then
+								table1.lastPlaceArgs = args
+								table1.lastPlaceTime = os.clock()
+							end
 						end
-					end)
+					end
 				end
 			end
-			return oldNamecall(self, table.unpack(args))
+			return oldNamecall(self, ...)
 		end))
 	end
 
-	function table1.clearTemporaryMacro()
+	table1.clearTemporaryMacro = function()
 		table1.recordedActions = {}
 		table1.waveStartTimes = {}
 		table1.currentMacroName = nil
 		table1.lastPlaceArgs = nil
 	end
 
-	function table1.startRecording()
-		if table1.recording then return end
+	table1.startRecording = function()
+		if table1.recording then
+			return
+		end
 		table1.clearTemporaryMacro()
 		table1.recording = true
-		onWaveChanged(getCurrentWave())
+		table1.macroonwavechanged(table1.macrogetcurrentwave())
 	end
 
-	function table1.stopRecording()
-		if not table1.recording then return end
+	table1.stopRecording = function()
+		if not table1.recording then
+			return
+		end
 		table1.recording = false
 	end
 
-	function table1.toggleRecording()
+	table1.toggleRecording = function()
 		if table1.recording then
 			table1.stopRecording()
 		else
@@ -2427,47 +2466,65 @@ do
 		end
 	end
 
-	function table1.getMacroList()
-		local folder = ensureMacroFolder()
+	table1.getMacroList = function()
+		local folder = table1.macroensurefolder()
 		table1.macrolistnames = {}
-		for _, child in ipairs(folder:GetChildren()) do
-			if child:IsA("StringValue") then
-				table.insert(table1.macrolistnames, child.Name)
+		local files = listfiles(folder)
+		for i = 1, #files do
+			local file = files[i]
+			local name = file:match("([^/\\]+)$")
+			if name and name:lower():match("%.json$") then
+				local stripped = name:gsub("%.json$", "")
+				if stripped ~= "" then
+					table.insert(table1.macrolistnames, stripped)
+				end
 			end
 		end
 		table.sort(table1.macrolistnames)
 		return table1.macrolistnames
 	end
 
-	function table1.saveMacro(name)
-		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
+	table1.saveMacro = function(name)
+		if type(name) ~= "string" or name == "" then
+			return false
+		end
+		name = name:gsub("[^%w%-%_]", "")
+		if name == "" then
+			return false
+		end
+		local folder = table1.macroensurefolder()
 		local data = {
 			name = name,
 			created = os.time(),
-			settings = deepCopy(table1.macroSettings),
-			actions = deepCopy(table1.recordedActions),
+			settings = table1.macrodeepcopy(table1.macroSettings),
+			actions = table1.macrodeepcopy(table1.recordedActions),
 		}
-		local json = table1.HttpService:JSONEncode(data)
-		local existing = folder:FindFirstChild(name)
-		if existing then existing:Destroy() end
-		local sv = Instance.new("StringValue")
-		sv.Name = name
-		sv.Value = json
-		sv.Parent = folder
+		writefile(folder .. "/" .. name .. ".json", table1.HttpService:JSONEncode(data))
 		table1.currentMacroName = name
 		return true
 	end
 
-	function table1.loadMacro(name)
-		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		local sv = folder:FindFirstChild(name)
-		if not sv or not sv:IsA("StringValue") then return false end
-		local ok, data = pcall(function()
-			return table1.HttpService:JSONDecode(sv.Value)
-		end)
-		if not ok or type(data) ~= "table" then return false end
+	table1.loadMacro = function(name)
+		if type(name) ~= "string" or name == "" then
+			return false
+		end
+		local folder = table1.macroensurefolder()
+		local path = folder .. "/" .. name .. ".json"
+		if not isfile(path) then
+			return false
+		end
+		local raw = readfile(path)
+		if type(raw) ~= "string" or raw == "" then
+			return false
+		end
+		local trimmed = string.gsub(raw, "^%s+", "")
+		if string.sub(trimmed, 1, 1) ~= "{" then
+			return false
+		end
+		local data = table1.HttpService:JSONDecode(raw)
+		if type(data) ~= "table" then
+			return false
+		end
 		table1.recordedActions = data.actions or {}
 		table1.currentMacroName = name
 		if type(data.settings) == "table" then
@@ -2478,12 +2535,14 @@ do
 		return true
 	end
 
-	function table1.deleteMacro(name)
-		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		local sv = folder:FindFirstChild(name)
-		if sv then
-			sv:Destroy()
+	table1.deleteMacro = function(name)
+		if type(name) ~= "string" or name == "" then
+			return false
+		end
+		local folder = table1.macroensurefolder()
+		local path = folder .. "/" .. name .. ".json"
+		if isfile(path) then
+			delfile(path)
 			if table1.currentMacroName == name then
 				table1.currentMacroName = nil
 			end
@@ -2492,70 +2551,74 @@ do
 		return false
 	end
 
-	function table1.createMacro(name)
-		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		if folder:FindFirstChild(name) then return false end
+	table1.createMacro = function(name)
+		if type(name) ~= "string" or name == "" then
+			return false
+		end
+		name = name:gsub("[^%w%-%_]", "")
+		if name == "" then
+			return false
+		end
+		local folder = table1.macroensurefolder()
+		local path = folder .. "/" .. name .. ".json"
+		if isfile(path) then
+			return false
+		end
 		local data = {
 			name = name,
 			created = os.time(),
-			settings = deepCopy(table1.macroSettings),
+			settings = table1.macrodeepcopy(table1.macroSettings),
 			actions = {},
 		}
-		local sv = Instance.new("StringValue")
-		sv.Name = name
-		sv.Value = table1.HttpService:JSONEncode(data)
-		sv.Parent = folder
+		writefile(path, table1.HttpService:JSONEncode(data))
 		table1.currentMacroName = name
 		table1.recordedActions = {}
 		return true
 	end
 
-	local function getRemoteByName(name)
-		local ep = safeGetEndpoints()
-		if not ep then return nil end
+	table1.macrogetremotebyname = function(name)
+		local ep = table1.macrosafegetendpoints()
+		if not ep then
+			return nil
+		end
 		return ep:FindFirstChild(name)
 	end
 
-	local function callRemote(entry)
-		local remote = getRemoteByName(entry.actionType)
-		if not remote then return false end
+	table1.macrocallremote = function(entry)
+		local remote = table1.macrogetremotebyname(entry.actionType)
+		if not remote then
+			return false
+		end
 		local args = entry.args or {}
 		table1.macroIgnoreReplay = true
 		local success = false
 		if entry.method == "InvokeServer" and remote:IsA("RemoteFunction") then
-			local ok, result = pcall(function()
-				return remote:InvokeServer(table.unpack(args))
-			end)
-			if ok then
-				if entry.actionType == "spawn_unit"
-					or entry.actionType == "upgrade_unit_ingame"
-					or entry.actionType == "sell_unit_ingame"
-				then
-					success = (result == true)
-				else
-					success = true
-				end
+			local result = remote:InvokeServer(table.unpack(args))
+			if entry.actionType == "spawn_unit"
+				or entry.actionType == "upgrade_unit_ingame"
+				or entry.actionType == "sell_unit_ingame"
+			then
+				success = (result == true)
+			else
+				success = true
 			end
 		elseif remote:IsA("RemoteEvent") then
-			local ok = pcall(function()
-				remote:FireServer(table.unpack(args))
-			end)
-			success = ok
+			remote:FireServer(table.unpack(args))
+			success = true
 		end
 		table1.macroIgnoreReplay = false
 		return success
 	end
 
-	local function spamUntilSuccess(entry)
+	table1.macrospamuntilsuccess = function(entry)
 		local attempts = 0
 		while attempts < table1.macroSettings.maxspamattempts do
 			if table1.macroSettings.skipfailuresandmoveontothenextwave then
-				if getCurrentWave() > entry.wave then
+				if table1.macrogetcurrentwave() > entry.wave then
 					return false
 				end
 			end
-			if callRemote(entry) then
+			if table1.macrocallremote(entry) then
 				return true
 			end
 			attempts = attempts + 1
@@ -2564,13 +2627,13 @@ do
 		return false
 	end
 
-	local function spamActiveAttack(entry)
+	table1.macrospamactiveattack = function(entry)
 		local attempts = 0
 		while attempts < table1.macroSettings.maxspamattempts do
-			if table1.macroSettings.skipfailuresandmoveontothenextwave and getCurrentWave() > entry.wave then
+			if table1.macroSettings.skipfailuresandmoveontothenextwave and table1.macrogetcurrentwave() > entry.wave then
 				return false
 			end
-			callRemote(entry)
+			table1.macrocallremote(entry)
 			attempts = attempts + 1
 			task.wait(table1.macroSettings.spaminterval)
 			if attempts >= 5 then
@@ -2580,29 +2643,33 @@ do
 		return false
 	end
 
-	function table1.replayMacro(name)
-		if table1.replaying then return end
-		if name and name ~= "" then
-			if not table1.loadMacro(name) then return end
+	table1.replayMacro = function(name)
+		if table1.replaying then
+			return
 		end
-		if #table1.recordedActions == 0 then return end
+		if name and name ~= "" then
+			if not table1.loadMacro(name) then
+				return
+			end
+		end
+		if #table1.recordedActions == 0 then
+			return
+		end
 		table1.replaying = true
-
 		if table1.macroSettings.autovotestart then
-			local voteRemote = getRemoteByName("vote_start")
+			local voteRemote = table1.macrogetremotebyname("vote_start")
 			if voteRemote and voteRemote:IsA("RemoteFunction") then
 				table1.macroIgnoreReplay = true
-				pcall(function()
-					voteRemote:InvokeServer()
-				end)
+				voteRemote:InvokeServer()
+				table1.macroIgnoreReplay = false
+			elseif voteRemote and voteRemote:IsA("RemoteEvent") then
+				table1.macroIgnoreReplay = true
+				voteRemote:FireServer()
 				table1.macroIgnoreReplay = false
 			end
 		end
-
-		-- always start from the live current wave (skip earlier recorded waves)
-		local startWave = getCurrentWave()
-		onWaveChanged(startWave)
-
+		local startWave = table1.macrogetcurrentwave()
+		table1.macroonwavechanged(startWave)
 		local actionsByWave = {}
 		for _, act in ipairs(table1.recordedActions) do
 			local w = act.wave or 0
@@ -2616,17 +2683,18 @@ do
 			table.insert(waves, w)
 		end
 		table.sort(waves)
-
 		task.spawn(function()
 			if table1.macroSettings.startupdelay and table1.macroSettings.startupdelay > 0 then
 				task.wait(table1.macroSettings.startupdelay)
 			end
 			for _, wave in ipairs(waves) do
-				while getCurrentWave() < wave do
-					if not table1.replaying then return end
+				while table1.macrogetcurrentwave() < wave do
+					if not table1.replaying then
+						return
+					end
 					task.wait(0.1)
 				end
-				if getCurrentWave() > wave and table1.macroSettings.skipfailuresandmoveontothenextwave then
+				if table1.macrogetcurrentwave() > wave and table1.macroSettings.skipfailuresandmoveontothenextwave then
 					continue
 				end
 				local waveActions = actionsByWave[wave]
@@ -2638,29 +2706,33 @@ do
 				end
 				local waveStartClock = table1.waveStartTimes[wave]
 				for _, entry in ipairs(waveActions) do
-					if not table1.replaying then return end
-					if table1.macroSettings.skipfailuresandmoveontothenextwave and getCurrentWave() > wave then
+					if not table1.replaying then
+						return
+					end
+					if table1.macroSettings.skipfailuresandmoveontothenextwave and table1.macrogetcurrentwave() > wave then
 						break
 					end
 					if table1.macroSettings.wavebasedtime then
 						local targetTime = waveStartClock + (entry.timeOffset or 0)
 						while os.clock() < targetTime do
-							if not table1.replaying then return end
-							if table1.macroSettings.skipfailuresandmoveontothenextwave and getCurrentWave() > wave then
+							if not table1.replaying then
+								return
+							end
+							if table1.macroSettings.skipfailuresandmoveontothenextwave and table1.macrogetcurrentwave() > wave then
 								break
 							end
 							task.wait(0.05)
 						end
 					end
 					if entry.actionType == "use_active_attack" then
-						spamActiveAttack(entry)
+						table1.macrospamactiveattack(entry)
 					elseif entry.actionType == "spawn_unit"
 						or entry.actionType == "upgrade_unit_ingame"
 						or entry.actionType == "sell_unit_ingame"
 					then
-						spamUntilSuccess(entry)
+						table1.macrospamuntilsuccess(entry)
 					else
-						callRemote(entry)
+						table1.macrocallremote(entry)
 					end
 				end
 			end
@@ -2668,7 +2740,7 @@ do
 		end)
 	end
 
-	function table1.stopReplay()
+	table1.stopReplay = function()
 		table1.replaying = false
 	end
 
@@ -2684,17 +2756,6 @@ do
 		table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, (table1.frameheight - 80) * 20)
 	end
 
-	-- ORDER:
-	-- 1 Macro Selection
-	-- 2 Macro Configurations
-	-- 3 Macro Replay
-	-- 4 Macro Record
-	-- 5 Macro Autoload Target
-	-- 6 Macro Autoload
-	-- 7 Macro Settings
-	-- 8 Macro Info
-
-	-- 1) Macro Selection
 	table1.rebuildMacroSelection = function()
 		local savedOrder, savedPos
 		if table1.macroSelectMain and table1.macroSelectMain.Parent then
@@ -2721,13 +2782,19 @@ do
 		if savedPos then
 			table1.macroSelectMain.Position = savedPos
 		end
+		local st = table1.maintoggleState[table1.macroSelectMain]
+		if st and st.relayout then
+			st.relayout()
+		end
 		table1.macroSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
-			if #table1.macrolistnames == 0 then return end
+			if #table1.macrolistnames == 0 then
+				return
+			end
 			local name = table1.macrolistnames[mode]
-			local st = table1.maintoggleState[table1.macroSelectMain]
-			if st and st.dropdownButtons and st.dropdownButtons[mode] then
-				local t = st.dropdownButtons[mode].Text
+			local st2 = table1.maintoggleState[table1.macroSelectMain]
+			if st2 and st2.dropdownButtons and st2.dropdownButtons[mode] then
+				local t = st2.dropdownButtons[mode].Text
 				if t and t ~= "None" then
 					name = t
 				end
@@ -2745,29 +2812,34 @@ do
 	end
 	table1.rebuildMacroSelection()
 
-	-- 2) Macro Configurations
 	table1.macroConfigActions, table1.macroConfigActionsChanged, table1.macroNameBox =
 		table1.maintoggle("Macro Configurations", "Save", "Load", "Delete", "Create", 1, table1.mainpage, true, 3, 1)
 	table1.macroConfigActions:SetAttribute("LayoutOrder", 2)
 	if table1.macroNameBox then
 		table1.macroNameBox.Text = ""
 		table1.macroNameBox.PlaceholderText = "Macro Name"
-		pcall(function()
-			table1.macroNameBox:SetAttribute("Numberlocked", false)
-			table1.macroNameBox:SetAttribute("preventchange", true)
-		end)
+		table1.macroNameBox:SetAttribute("Numberlocked", false)
+		table1.macroNameBox:SetAttribute("preventchange", true)
 	end
 	table1.macroConfigActionsChanged:Connect(function(mode)
 		local name = table1.macroNameBox and table1.macroNameBox.Text or ""
 		name = name:gsub("^%s+", ""):gsub("%s+$", "")
 		if mode == 1 then
-			if name ~= "" then table1.saveMacro(name) end
+			if name ~= "" then
+				table1.saveMacro(name)
+			end
 		elseif mode == 2 then
-			if name ~= "" then table1.loadMacro(name) end
+			if name ~= "" then
+				table1.loadMacro(name)
+			end
 		elseif mode == 3 then
-			if name ~= "" then table1.deleteMacro(name) end
+			if name ~= "" then
+				table1.deleteMacro(name)
+			end
 		elseif mode == 4 then
-			if name ~= "" then table1.createMacro(name) end
+			if name ~= "" then
+				table1.createMacro(name)
+			end
 		end
 		table1.rebuildMacroSelection()
 		if table1.rebuildMacroAutoloadSelect then
@@ -2778,7 +2850,6 @@ do
 		end
 	end)
 
-	-- 3) Macro Replay
 	table1.macroReplayToggle, table1.macroReplayChanged =
 		table1.maintoggle("Macro Replay", "Replay", "Stop", 1, table1.mainpage, true, 3, 0)
 	table1.macroReplayToggle:SetAttribute("LayoutOrder", 3)
@@ -2799,7 +2870,6 @@ do
 		end
 	end)
 
-	-- 4) Macro Record (REC action)
 	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
 		table1.maintoggle("Record Macro", "On", 1, table1.mainpage, true, 0, 0, 1)
 	do
@@ -2821,8 +2891,12 @@ do
 				table1.macroRecordToggle:SetAttribute("Mode", newMode)
 				st.currentmode = newMode
 				st.lastMode = newMode
-				if st.setoutline then st.setoutline(newMode, false) end
-				if st.modechanged then st.modechanged:Fire(newMode) end
+				if st.setoutline then
+					st.setoutline(newMode, false)
+				end
+				if st.modechanged then
+					st.modechanged:Fire(newMode)
+				end
 			end
 		end)
 	end
@@ -2835,7 +2909,6 @@ do
 		end
 	end)
 
-	-- 5) Macro Autoload Target
 	table1.syncMacroAutoloadSelectionFromUI = function()
 		local name = ""
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
@@ -2912,6 +2985,9 @@ do
 			if st.updateDropdownText then
 				st.updateDropdownText()
 			end
+			if st.relayout then
+				st.relayout()
+			end
 		end
 		table1.macroAutoloadSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
@@ -2936,7 +3012,6 @@ do
 	end
 	table1.rebuildMacroAutoloadSelect()
 
-	-- 6) Macro Autoload enable
 	table1.macroAutoloadEnable, table1.macroAutoloadEnableChanged =
 		table1.maintoggle("Macro Autoload", "On", 1, table1.mainpage, true, 0, 0)
 	table1.macroAutoloadEnable:SetAttribute("LayoutOrder", 6)
@@ -2946,7 +3021,9 @@ do
 		if st then
 			st.currentmode = 1
 			st.lastMode = 1
-			if st.setoutline then st.setoutline(1, false) end
+			if st.setoutline then
+				st.setoutline(1, false)
+			end
 		end
 	end
 	table1.macroAutoloadEnableChanged:Connect(function()
@@ -2959,7 +3036,6 @@ do
 		table1.writeAutoload(table1.autoloadData)
 	end)
 
-	-- 7) Macro Settings — multiselect DROPDOWN (modeType 2)
 	table1.macroSettingsToggle, table1.macroSettingsChanged =
 		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
 	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 7)
@@ -2992,11 +3068,9 @@ do
 		end
 	end)
 
-	-- 8) Macro Info LAST
 	table1.macroInfoToggle, table1.macroInfoChanged =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
-
 	table1.macroInfoLabel = Instance.new("TextLabel")
 	table1.macroInfoLabel.Name = "MacroInfoLabel"
 	table1.macroInfoLabel.Size = UDim2.new(1, -16, 0, 40)
@@ -3016,14 +3090,14 @@ do
 		if not table1.macroInfoLabel or not table1.macroInfoLabel.Parent then
 			return
 		end
-		local wave = getCurrentWave()
+		local wave = table1.macrogetcurrentwave()
 		if not table1.waveStartTimes[wave] then
 			table1.waveStartTimes[wave] = os.clock()
 		end
 		local lines = {}
 		table.insert(lines, "Wave: " .. tostring(wave))
-		table.insert(lines, string.format("Time on wave: %.2fs", getTimeSinceWaveStart(wave)))
-		table.insert(lines, "Money: " .. tostring(getMoney()))
+		table.insert(lines, string.format("Time on wave: %.2fs", table1.macrogettimesincewavestart(wave)))
+		table.insert(lines, "Money: " .. tostring(table1.macrogetmoney()))
 		table.insert(lines, "Macro: " .. (table1.currentMacroName or "(temporary)"))
 		table.insert(lines, "Recording: " .. (table1.recording and "YES" or "no"))
 		table.insert(lines, "Replaying: " .. (table1.replaying and "YES" or "no"))
@@ -3095,18 +3169,18 @@ do
 		end
 	end)
 
-	-- macro autoload apply (does not recreate Settings autoload UI — base handles that)
 	task.spawn(function()
 		task.wait(1.2)
 		local data = table1.readAutoload()
 		table1.autoloadData = data
-		if data.enabled ~= true then return end
+		if data.enabled ~= true then
+			return
+		end
 		local name = tostring(data.macroConfig or "")
-		if name == "" or name == "None" then return end
-		local ok = pcall(function()
-			table1.loadMacro(name)
-		end)
-		if ok then
+		if name == "" or name == "None" then
+			return
+		end
+		if table1.loadMacro(name) then
 			if table1.macroNameBox then
 				table1.macroNameBox.Text = name
 			end
@@ -3114,10 +3188,10 @@ do
 				table1.refreshMacroInfo()
 			end
 			if table1.rebuildMacroSelection then
-				pcall(table1.rebuildMacroSelection)
+				table1.rebuildMacroSelection()
 			end
 			if table1.rebuildMacroAutoloadSelect then
-				pcall(table1.rebuildMacroAutoloadSelect)
+				table1.rebuildMacroAutoloadSelect()
 			end
 		end
 	end)
@@ -3135,6 +3209,7 @@ end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
+
 
 
 
