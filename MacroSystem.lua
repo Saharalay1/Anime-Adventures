@@ -12,7 +12,6 @@ do
 		spaminterval = 0.05,
 		maxspamattempts = 200,
 	}
-
 	table1.recording = false
 	table1.replaying = false
 	table1.currentMacroName = nil
@@ -24,35 +23,41 @@ do
 	table1.macroIgnoreReplay = false
 	table1.macrolistnames = {}
 
-	local endpoints, unitsFolder, waveValue = nil, nil, nil
-
-	local function safeGetEndpoints()
-		if endpoints and endpoints.Parent then return endpoints end
+	local function resolveMpmp()
 		local ok, rs = pcall(function() return game:GetService("ReplicatedStorage") end)
 		if not ok or not rs then return nil end
 		local e = rs:FindFirstChild("endpoints")
 		if e then e = e:FindFirstChild("client_to_server") end
-		endpoints = e
+		return e
+	end
+	table1.mpmp = resolveMpmp()
+
+	local endpoints, unitsFolder, waveValue = nil, nil, nil
+	local function safeGetEndpoints()
+		if table1.mpmp and table1.mpmp.Parent then
+			endpoints = table1.mpmp
+			return endpoints
+		end
+		endpoints = resolveMpmp()
+		table1.mpmp = endpoints
 		return endpoints
 	end
-
 	local function safeGetUnits()
 		if unitsFolder and unitsFolder.Parent then return unitsFolder end
 		unitsFolder = table1.Workspace:FindFirstChild("_UNITS")
 		return unitsFolder
 	end
-
 	local function safeGetWave()
 		if waveValue and waveValue.Parent then return waveValue end
 		waveValue = table1.Workspace:FindFirstChild("_wave_num")
 		return waveValue
 	end
 
+	-- ONLY these
 	local ACTION_REMOTES = {
 		spawn_unit = true,
-		upgrade_unit_ingame = true,
 		sell_unit_ingame = true,
-		change_priority = true,
+		upgrade_unit_ingame = true,
 		use_active_attack = true,
 		vote_start = true,
 	}
@@ -66,7 +71,6 @@ do
 		return n
 	end
 
-	-- JSON-safe arg packing (Instances / Vector3 / etc. break JSONEncode otherwise)
 	local function serializeValue(v)
 		local t = typeof(v)
 		if t == "nil" then
@@ -113,18 +117,14 @@ do
 	end
 
 	local function deserializeValue(v)
-		if type(v) ~= "table" then
-			return v
-		end
+		if type(v) ~= "table" then return v end
 		local t = v.__t
 		if t == "nil" then
 			return nil
 		elseif t == "Instance" then
 			local cur = game
 			for part in string.gmatch(v.path or "", "[^%.]+") do
-				if cur then
-					cur = cur:FindFirstChild(part)
-				end
+				if cur then cur = cur:FindFirstChild(part) end
 			end
 			return cur
 		elseif t == "Vector3" then
@@ -139,9 +139,7 @@ do
 		elseif t == "array" then
 			local out = {}
 			for i = 1, (v.n or #v) do
-				if v[i] ~= nil then
-					out[i] = deserializeValue(v[i])
-				end
+				if v[i] ~= nil then out[i] = deserializeValue(v[i]) end
 			end
 			return out
 		elseif t == "table" then
@@ -155,7 +153,6 @@ do
 		elseif t == "string" then
 			return v.v
 		end
-		-- plain array-like without __t
 		if v.n or #v > 0 then
 			local out = {}
 			for i = 1, (v.n or #v) do
@@ -178,7 +175,6 @@ do
 		return deserializeValue(args)
 	end
 
-
 	local function getMoney()
 		local ok, gui = pcall(function()
 			return table1.player.PlayerGui.spawn_units.Lives.Frame.Resource.Money
@@ -200,13 +196,9 @@ do
 	end
 
 	local function ensureMacroFolder()
-		if not isfolder(table1.folder1) then
-			makefolder(table1.folder1)
-		end
+		if not isfolder(table1.folder1) then makefolder(table1.folder1) end
 		local path = table1.folder1 .. "/macroconfigs"
-		if not isfolder(path) then
-			makefolder(path)
-		end
+		if not isfolder(path) then makefolder(path) end
 		return path
 	end
 
@@ -249,7 +241,6 @@ do
 			end)
 		end
 	end
-
 	table1.autoloadData = table1.autoloadData or table1.readAutoload()
 
 	local function onWaveChanged(newWave)
@@ -303,56 +294,48 @@ do
 		return out
 	end
 
-	-- Forward call first, capture return. Only log successful calls (not false).
+	-- ========== RECORDING HOOK (aggressive + simple) ==========
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
 			local results = table.pack(oldNamecall(self, ...))
+
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
 				if method == "FireServer" or method == "InvokeServer" then
-					local remoteSelf = self
-					local nArgs = select("#", ...)
-					local packed = { ... }
-					local ret = results[1]
-					task.defer(function()
-						pcall(function()
-							if ret == false then return end
-							if typeof(remoteSelf) ~= "Instance" then return end
-							local cn = remoteSelf.ClassName
-							if cn ~= "RemoteEvent" and cn ~= "RemoteFunction" then return end
-							local remoteName = remoteSelf.Name
-							if not ACTION_REMOTES[remoteName] then return end
-							local args = {}
-							for i = 1, nArgs do
-								args[i] = packed[i]
-							end
-							local wave = getCurrentWave()
-							local copied = safeCopyArgs(args)
-							table.insert(table1.recordedActions, {
-								wave = wave,
-								timeOffset = getTimeSinceWaveStart(wave),
-								actionType = remoteName,
-								method = method,
-								args = serializeArgs(copied),
-								unitName = nil,
-								unitId = (typeof(args[1]) == "Instance" and args[1].Name) or args[1],
-								remotePath = remoteSelf:GetFullName(),
-								moneyAtTime = getMoney(),
-								timestamp = os.clock(),
-								result = ret,
-							})
-							if remoteName == "spawn_unit" then
-								table1.lastPlaceArgs = args
-								table1.lastPlaceTime = os.clock()
-							end
-							if table1.refreshMacroInfo then
-								table1.refreshMacroInfo()
-							end
-						end)
-					end)
+					local remoteName = typeof(self) == "Instance" and self.Name or nil
+					if remoteName and ACTION_REMOTES[remoteName] then
+						local nArgs = select("#", ...)
+						local packed = { ... }
+						local wave = getCurrentWave()
+						local timeOff = getTimeSinceWaveStart(wave)
+						local copied = safeCopyArgs(packed)
+
+						table.insert(table1.recordedActions, {
+							wave = wave,
+							timeOffset = timeOff,
+							actionType = remoteName,
+							method = method,
+							args = serializeArgs(copied),
+							unitName = nil,
+							unitId = (typeof(packed[1]) == "Instance" and packed[1].Name) or packed[1],
+							remotePath = self:GetFullName(),
+							moneyAtTime = getMoney(),
+							timestamp = os.clock(),
+						})
+
+						if remoteName == "spawn_unit" then
+							table1.lastPlaceArgs = packed
+							table1.lastPlaceTime = os.clock()
+						end
+
+						if table1.refreshMacroInfo then
+							task.defer(table1.refreshMacroInfo)
+						end
+					end
 				end
 			end
+
 			return table.unpack(results, 1, results.n)
 		end))
 	end
@@ -407,7 +390,6 @@ do
 	function table1.saveMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
 		ensureMacroFolder()
-		-- always dump the live temporary recording (actions + wave + timeOffset + remotes)
 		local actionsOut = {}
 		for i, act in ipairs(table1.recordedActions or {}) do
 			actionsOut[i] = {
@@ -420,7 +402,6 @@ do
 				unitId = act.unitId,
 				remotePath = act.remotePath,
 				moneyAtTime = act.moneyAtTime,
-				result = act.result,
 			}
 		end
 		local data = {
@@ -433,9 +414,7 @@ do
 		local okEncode, jsonOrErr = pcall(function()
 			return table1.HttpService:JSONEncode(data)
 		end)
-		if not okEncode or type(jsonOrErr) ~= "string" then
-			return false
-		end
+		if not okEncode or type(jsonOrErr) ~= "string" then return false end
 		local okWrite = pcall(function()
 			writefile(macroFilePath(name), jsonOrErr)
 		end)
@@ -662,21 +641,10 @@ do
 		table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, (table1.frameheight - 80) * 20)
 	end
 
-	-- ORDER:
-	-- 1 Macro Selection
-	-- 2 Macro Configurations
-	-- 3 Macro Replay
-	-- 4 Macro Record
-	-- 5 Macro Autoload Target
-	-- 6 Macro Autoload
-	-- 7 Macro Settings
-	-- 8 Macro Info
-
+	-- UI
 	table1.rebuildMacroSelection = function(force)
 		table1.getMacroList()
-		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then
-			return
-		end
+		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then return end
 		local savedOrder, savedPos
 		if table1.macroSelectMain and table1.macroSelectMain.Parent then
 			savedOrder = table1.macroSelectMain:GetAttribute("LayoutOrder")
@@ -698,9 +666,7 @@ do
 		table.insert(args, 0)
 		table1.macroSelectMain, table1.macroSelectChanged = table1.maintoggle(table.unpack(args))
 		table1.macroSelectMain:SetAttribute("LayoutOrder", savedOrder or 1)
-		if savedPos then
-			table1.macroSelectMain.Position = savedPos
-		end
+		if savedPos then table1.macroSelectMain.Position = savedPos end
 		table1.macroSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
 			table1.getMacroList()
@@ -709,18 +675,12 @@ do
 			local st = table1.maintoggleState[table1.macroSelectMain]
 			if st and st.dropdownButtons and st.dropdownButtons[mode] then
 				local t = st.dropdownButtons[mode].Text
-				if t and t ~= "None" then
-					name = t
-				end
+				if t and t ~= "None" then name = t end
 			end
 			if name and name ~= "None" then
-				if table1.macroNameBox then
-					table1.macroNameBox.Text = name
-				end
+				if table1.macroNameBox then table1.macroNameBox.Text = name end
 				table1.loadMacro(name)
-				if table1.refreshMacroInfo then
-					table1.refreshMacroInfo()
-				end
+				if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 			end
 		end)
 	end
@@ -747,21 +707,15 @@ do
 		elseif mode == 3 then
 			if name ~= "" then table1.deleteMacro(name) end
 			table1.rebuildMacroSelection(true)
-			if table1.rebuildMacroAutoloadSelect then
-				table1.rebuildMacroAutoloadSelect(true)
-			end
+			if table1.rebuildMacroAutoloadSelect then table1.rebuildMacroAutoloadSelect(true) end
 		elseif mode == 4 then
 			if name ~= "" then
 				table1.createMacro(name)
 				table1.rebuildMacroSelection(true)
-				if table1.rebuildMacroAutoloadSelect then
-					table1.rebuildMacroAutoloadSelect(true)
-				end
+				if table1.rebuildMacroAutoloadSelect then table1.rebuildMacroAutoloadSelect(true) end
 			end
 		end
-		if table1.refreshMacroInfo then
-			table1.refreshMacroInfo()
-		end
+		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end)
 
 	table1.macroReplayToggle, table1.macroReplayChanged =
@@ -779,9 +733,7 @@ do
 		elseif mode == 2 then
 			table1.stopReplay()
 		end
-		if table1.refreshMacroInfo then
-			table1.refreshMacroInfo()
-		end
+		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end)
 
 	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
@@ -790,9 +742,7 @@ do
 		local st = table1.maintoggleState[table1.macroRecordToggle]
 		if st then
 			st.actiontext = "REC"
-			if st.actiontextbox then
-				st.actiontextbox.Text = "REC"
-			end
+			if st.actiontextbox then st.actiontextbox.Text = "REC" end
 			table1.macroRecordToggle:SetAttribute("LayoutOrder", 4)
 		end
 	end
@@ -831,9 +781,7 @@ do
 				end
 			elseif table1.autoloadMacroNames and table1.autoloadMacroNames[mode] then
 				local t = table1.autoloadMacroNames[mode]
-				if t and t ~= "None" then
-					name = t
-				end
+				if t and t ~= "None" then name = t end
 			end
 		end
 		table1.autoloadData.macroConfig = name
@@ -842,9 +790,7 @@ do
 
 	table1.rebuildMacroAutoloadSelect = function(force)
 		table1.getMacroList()
-		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent and not force then
-			return
-		end
+		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent and not force then return end
 		local savedOrder, savedPos
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
 			savedOrder = table1.macroAutoloadSelect:GetAttribute("LayoutOrder")
@@ -866,9 +812,7 @@ do
 		table.insert(args, 0)
 		table1.macroAutoloadSelect, table1.macroAutoloadSelectChanged = table1.maintoggle(table.unpack(args))
 		table1.macroAutoloadSelect:SetAttribute("LayoutOrder", savedOrder or 5)
-		if savedPos then
-			table1.macroAutoloadSelect.Position = savedPos
-		end
+		if savedPos then table1.macroAutoloadSelect.Position = savedPos end
 		local restoreMode = 1
 		if table1.autoloadData.macroConfig and table1.autoloadData.macroConfig ~= "" then
 			for i, n in ipairs(table1.autoloadMacroNames) do
@@ -895,9 +839,7 @@ do
 					end
 				end
 			end
-			if st.updateDropdownText then
-				st.updateDropdownText()
-			end
+			if st.updateDropdownText then st.updateDropdownText() end
 		end
 		table1.macroAutoloadSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
@@ -908,9 +850,7 @@ do
 			local st2 = table1.maintoggleState[table1.macroAutoloadSelect]
 			if st2 and st2.dropdownButtons and st2.dropdownButtons[mode] then
 				local t = st2.dropdownButtons[mode].Text
-				if type(t) == "string" and t ~= "" then
-					chosen = t
-				end
+				if type(t) == "string" and t ~= "" then chosen = t end
 			end
 			if chosen == "None" or chosen == "" then
 				table1.autoloadData.macroConfig = ""
@@ -937,12 +877,8 @@ do
 	table1.macroAutoloadEnableChanged:Connect(function()
 		local mode = table1.macroAutoloadEnable:GetAttribute("Mode") or 0
 		table1.autoloadData.enabled = (mode == 1)
-		if table1.syncMacroAutoloadSelectionFromUI then
-			table1.syncMacroAutoloadSelectionFromUI()
-		end
-		if table1.syncAutoloadSelectionFromUI then
-			table1.syncAutoloadSelectionFromUI()
-		end
+		if table1.syncMacroAutoloadSelectionFromUI then table1.syncMacroAutoloadSelectionFromUI() end
+		if table1.syncAutoloadSelectionFromUI then table1.syncAutoloadSelectionFromUI() end
 		table1.writeAutoload(table1.autoloadData)
 	end)
 
@@ -953,9 +889,7 @@ do
 		local st = table1.maintoggleState[table1.macroSettingsToggle]
 		local function setSel(i, on)
 			table1.macroSettingsToggle:SetAttribute("Selected" .. i, on == true)
-			if st and st.selectedModes then
-				st.selectedModes[i] = on == true
-			end
+			if st and st.selectedModes then st.selectedModes[i] = on == true end
 			if st and st.dropdownButtons and st.dropdownButtons[i] then
 				st.dropdownButtons[i].BackgroundColor3 = on and table1.selectedtabcolor or table1.tabinactive
 				st.dropdownButtons[i].BackgroundTransparency = on and 0 or 0.15
@@ -964,9 +898,7 @@ do
 		setSel(1, table1.macroSettings.wavebasedtime)
 		setSel(2, table1.macroSettings.autovotestart)
 		setSel(3, table1.macroSettings.skipfailuresandmoveontothenextwave)
-		if st and st.updateDropdownText then
-			st.updateDropdownText()
-		end
+		if st and st.updateDropdownText then st.updateDropdownText() end
 	end
 	table1.macroSettingsChanged:Connect(function(idx, selected)
 		if idx == 1 then
@@ -978,7 +910,7 @@ do
 		end
 	end)
 
-	-- Macro Info: 1 Refresh + manually placed textboxes (all visible when expanded)
+	-- Macro Info
 	table1.macroInfoToggle, table1.macroInfoChanged =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
@@ -1011,7 +943,6 @@ do
 		return box
 	end
 
-	-- stacked so every line is on-screen (header ~28, refresh row ~26, then boxes)
 	table1.macroInfoWaveBox = makeInfoBox("MacroInfoWave", 64)
 	table1.macroInfoTimeBox = makeInfoBox("MacroInfoTime", 90)
 	table1.macroInfoMoneyBox = makeInfoBox("MacroInfoMoney", 116)
@@ -1022,7 +953,6 @@ do
 	table1.macroInfoLogBox.TextWrapped = true
 	table1.macroInfoLogBox.MultiLine = true
 	table1.macroInfoLogBox.TextYAlignment = Enum.TextYAlignment.Top
-
 	table1.macroInfoWaveBox.Text = "Wave: -"
 	table1.macroInfoTimeBox.Text = "Time on wave: -"
 	table1.macroInfoMoneyBox.Text = "Money: -"
@@ -1039,9 +969,7 @@ do
 			if not st.folded then
 				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
 			end
-			if st.relayout then
-				st.relayout()
-			end
+			if st.relayout then st.relayout() end
 		end
 	end
 
@@ -1055,17 +983,12 @@ do
 			table1.macroInfoLogBox,
 		}
 		for _, box in ipairs(boxes) do
-			if box then
-				box.Visible = not folded
-			end
+			if box then box.Visible = not folded end
 		end
 		local st = table1.maintoggleState[table1.macroInfoToggle]
-		if st then
-			st.folded = folded
-		end
+		if st then st.folded = folded end
 	end
 
-	-- hide content whenever fold button is used
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
 		if st and st.fold and st.fold:IsA("GuiButton") then
@@ -1075,7 +998,6 @@ do
 					local isFolded = false
 					if s2 then
 						isFolded = s2.folded == true
-						-- also treat short height as folded
 						if table1.macroInfoToggle.Size.Y.Offset <= (table1.toggleheight or 25) + 8 then
 							isFolded = true
 						end
@@ -1084,7 +1006,6 @@ do
 				end)
 			end)
 		end
-		-- size change watcher (covers any fold path)
 		table1.macroInfoToggle:GetPropertyChangedSignal("Size"):Connect(function()
 			local h = table1.macroInfoToggle.Size.Y.Offset
 			local folded = h <= (table1.toggleheight or 25) + 10
@@ -1103,9 +1024,8 @@ do
 		if table1.macroInfoSetFolded then
 			table1.macroInfoSetFolded(folded)
 		end
-		if folded then
-			return
-		end
+		if folded then return end
+
 		if table1.macroInfoWaveBox then
 			table1.macroInfoWaveBox.Text = "Wave: " .. tostring(wave)
 		end
@@ -1126,41 +1046,52 @@ do
 				#table1.recordedActions
 			)
 		end
+
 		if table1.macroInfoLogBox then
 			local actions = table1.recordedActions or {}
 			local lines = {}
-			table.insert(lines, string.format("--- %d actions (temporary/saved) ---", #actions))
-			local byWave = {}
-			for _, act in ipairs(actions) do
-				local w = act.wave
-				if w == nil then w = 0 end
-				byWave[w] = byWave[w] or {}
-				table.insert(byWave[w], act)
-			end
-			local waves = {}
-			for w in pairs(byWave) do
-				table.insert(waves, w)
-			end
-			table.sort(waves)
-			for _, w in ipairs(waves) do
-				table.insert(lines, "")
-				table.insert(lines, string.format("== Wave %s ==", tostring(w)))
-				for _, act in ipairs(byWave[w]) do
-					local label = tostring(act.unitName or act.unitId or "")
-					if label ~= "" then label = " | " .. label end
-					table.insert(lines, string.format(
-						"  +%.2fs  %s%s",
-						tonumber(act.timeOffset) or 0,
-						tostring(act.actionType or "?"),
-						label
-					))
+			table.insert(lines, string.format("--- %d actions ---", #actions))
+
+			if #actions == 0 then
+				table.insert(lines, "(empty - press REC then place/upgrade/sell/attack)")
+			else
+				local byWave = {}
+				for _, act in ipairs(actions) do
+					local w = act.wave
+					if w == nil then w = 0 end
+					byWave[w] = byWave[w] or {}
+					table.insert(byWave[w], act)
+				end
+				local waves = {}
+				for w in pairs(byWave) do
+					table.insert(waves, w)
+				end
+				table.sort(waves)
+
+				for _, w in ipairs(waves) do
+					table.insert(lines, "")
+					table.insert(lines, string.format("== Wave %s ==", tostring(w)))
+					for _, act in ipairs(byWave[w]) do
+						local extra = ""
+						if act.unitName or act.unitId then
+							extra = " | " .. tostring(act.unitName or act.unitId)
+						end
+						table.insert(lines, string.format(
+							"  %s  |  Wave %s  |  +%.2fs%s",
+							tostring(act.actionType or "?"),
+							tostring(act.wave or 0),
+							tonumber(act.timeOffset) or 0,
+							extra
+						))
+					end
 				end
 			end
+
 			local logText = table.concat(lines, "\n")
 			table1.macroInfoLogBox.Text = logText
 			table1.macroInfoLogBox.MultiLine = true
 			table1.macroInfoLogBox.TextWrapped = true
-			local logH = math.max(72, math.min(220, (#lines + 1) * 15))
+			local logH = math.max(72, math.min(260, (#lines + 2) * 14))
 			table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, logH)
 			local totalH = 194 + logH + 12
 			if st then
@@ -1169,9 +1100,7 @@ do
 				if not st.folded then
 					table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
 				end
-				if st.relayout then
-					st.relayout()
-				end
+				if st.relayout then st.relayout() end
 			end
 			if table1.mainpage and table1.mainpage:IsA("ScrollingFrame") then
 				local maxY = 0
@@ -1195,7 +1124,7 @@ do
 			if table1.macroInfoToggle and table1.macroInfoToggle.Parent then
 				table1.refreshMacroInfo()
 			end
-			task.wait(0.5)
+			task.wait(0.4)
 		end
 	end)
 
@@ -1207,19 +1136,13 @@ do
 		local name = tostring(data.macroConfig or "")
 		if name == "" or name == "None" then return end
 		if table1.loadMacro(name) then
-			if table1.macroNameBox then
-				table1.macroNameBox.Text = name
-			end
-			if table1.refreshMacroInfo then
-				table1.refreshMacroInfo()
-			end
+			if table1.macroNameBox then table1.macroNameBox.Text = name end
+			if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 		end
 	end)
 
 	task.defer(function()
-		if table1.refreshMacroInfo then
-			table1.refreshMacroInfo()
-		end
+		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end)
 end
 -- ============================================================
