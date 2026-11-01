@@ -2455,71 +2455,83 @@ do
 		return out
 	end
 
-	-- ========== REMOTE CAPTURE ==========
-	-- Only way to catch every client remote is namecall.
-	-- Logic:
-	--   InvokeServer → only save/print when return value is exactly true
-	--   FireServer   → always save/print (no return value)
+	local function argsToString(args)
+		local parts = {}
+		for i = 1, #args do
+			local v = args[i]
+			local t = typeof(v)
+			if t == "Instance" then
+				table.insert(parts, v:GetFullName())
+			elseif t == "Vector3" then
+				table.insert(parts, string.format("Vector3(%.2f,%.2f,%.2f)", v.X, v.Y, v.Z))
+			elseif t == "table" then
+				table.insert(parts, "{table}")
+			else
+				table.insert(parts, tostring(v))
+			end
+		end
+		return table.concat(parts, ", ")
+	end
+
+	-- ========== RAW REMOTE CAPTURE ==========
+	-- Prints EVERY remote the client sends.
+	-- While recording → also saves it with exact args + wave + time.
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
 			local method = getnamecallmethod()
 			local results = table.pack(oldNamecall(self, ...))
 
-			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
-				if method == "FireServer" or method == "InvokeServer" then
-					if typeof(self) == "Instance" and (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction") then
-						local accept = false
-						if method == "FireServer" then
-							accept = true
-						elseif method == "InvokeServer" then
-							-- only accept when the server returned true
-							if results[1] == true then
-								accept = true
-							end
+			if method == "FireServer" or method == "InvokeServer" then
+				if typeof(self) == "Instance" and (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction") then
+					local packed = { ... }
+					local nArgs = select("#", ...)
+					local fullPath = self:GetFullName()
+
+					-- ALWAYS print so we can see what the client is sending
+					print(string.format(
+						"[CLIENT REMOTE] %s :%s( %s )",
+						fullPath,
+						method,
+						argsToString(packed)
+					))
+
+					-- SAVE only while recording
+					if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
+						local wave = getCurrentWave()
+						local timeOff = getTimeSinceWaveStart(wave)
+						local copied = safeCopyArgs(packed)
+
+						local entry = {
+							wave = wave,
+							timeOffset = timeOff,
+							actionType = self.Name,
+							method = method,
+							args = serializeArgs(copied),
+							unitName = nil,
+							unitId = (typeof(packed[1]) == "Instance" and packed[1].Name) or packed[1],
+							remotePath = fullPath,
+							moneyAtTime = getMoney(),
+							timestamp = os.clock(),
+						}
+
+						table.insert(table1.recordedActions, entry)
+
+						print(string.format(
+							"[MACRO SAVED] %s | Wave %s | +%.2fs | args:%d",
+							fullPath,
+							tostring(wave),
+							timeOff,
+							nArgs
+						))
+
+						if self.Name == "spawn_unit" then
+							table1.lastPlaceArgs = packed
+							table1.lastPlaceTime = os.clock()
 						end
 
-						if accept then
-							local remoteName = self.Name
-							local nArgs = select("#", ...)
-							local packed = { ... }
-							local wave = getCurrentWave()
-							local timeOff = getTimeSinceWaveStart(wave)
-							local copied = safeCopyArgs(packed)
-
-							local entry = {
-								wave = wave,
-								timeOffset = timeOff,
-								actionType = remoteName,
-								method = method,
-								args = serializeArgs(copied),
-								unitName = nil,
-								unitId = (typeof(packed[1]) == "Instance" and packed[1].Name) or packed[1],
-								remotePath = self:GetFullName(),
-								moneyAtTime = getMoney(),
-								timestamp = os.clock(),
-							}
-
-							table.insert(table1.recordedActions, entry)
-
-							-- live print so you can confirm it is working
-							print(string.format(
-								"[MACRO] SAVED  %s  |  Wave %s  |  +%.2fs  |  %s  |  args:%d",
-								tostring(remoteName),
-								tostring(wave),
-								timeOff,
-								method,
-								nArgs
-							))
-
-							if remoteName == "spawn_unit" then
-								table1.lastPlaceArgs = packed
-								table1.lastPlaceTime = os.clock()
-							end
-
-							if table1.refreshMacroInfo then
-								task.defer(table1.refreshMacroInfo)
-							end
+						if table1.refreshMacroInfo then
+							task.defer(table1.refreshMacroInfo)
 						end
 					end
 				end
@@ -2527,8 +2539,9 @@ do
 
 			return table.unpack(results, 1, results.n)
 		end))
+		print("[MACRO] namecall hook installed")
 	else
-		warn("[MACRO] hookmetamethod not available - cannot record remotes")
+		warn("[MACRO] hookmetamethod not available")
 	end
 
 	function table1.clearTemporaryMacro()
@@ -2543,7 +2556,7 @@ do
 		table1.clearTemporaryMacro()
 		table1.recording = true
 		onWaveChanged(getCurrentWave())
-		print("[MACRO] Recording STARTED")
+		print("[MACRO] Recording STARTED - every remote the client sends will be printed + saved")
 		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end
 
@@ -2707,9 +2720,7 @@ do
 			local ok, result = pcall(function()
 				return remote:InvokeServer(table.unpack(args))
 			end)
-			if ok then
-				success = (result == true)
-			end
+			success = ok and (result == true or result ~= false)
 		elseif remote:IsA("RemoteEvent") then
 			local ok = pcall(function()
 				remote:FireServer(table.unpack(args))
@@ -2862,7 +2873,7 @@ do
 		table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, (table1.frameheight - 80) * 20)
 	end
 
-	-- UI
+	-- UI (same as before)
 	table1.rebuildMacroSelection = function(force)
 		table1.getMacroList()
 		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then return end
@@ -3131,7 +3142,6 @@ do
 		end
 	end)
 
-	-- Macro Info
 	table1.macroInfoToggle, table1.macroInfoChanged =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
@@ -3366,7 +3376,9 @@ do
 		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
 	end)
 
-	print("[MACRO] System loaded - press REC then place/upgrade units to test")
+	print("[MACRO] System loaded")
+	print("[MACRO] Now every remote the client sends will be printed in console")
+	print("[MACRO] Press REC → place/upgrade units → watch console")
 end
 -- ============================================================
 -- END MACRO SYSTEM
