@@ -2223,15 +2223,6 @@ do
 		return waveValue
 	end
 
-	-- ONLY these
-	local ACTION_REMOTES = {
-		spawn_unit = true,
-		sell_unit_ingame = true,
-		upgrade_unit_ingame = true,
-		use_active_attack = true,
-		vote_start = true,
-	}
-
 	local function deepCopy(t)
 		if type(t) ~= "table" then return t end
 		local n = {}
@@ -2464,7 +2455,9 @@ do
 		return out
 	end
 
-	-- ========== RECORDING HOOK (aggressive + simple) ==========
+	-- ========== RECORD ALL CLIENT REMOTES ==========
+	-- FireServer  → always record
+	-- InvokeServer → record only if NONE of the returns are false
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -2473,34 +2466,47 @@ do
 
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
 				if method == "FireServer" or method == "InvokeServer" then
-					local remoteName = typeof(self) == "Instance" and self.Name or nil
-					if remoteName and ACTION_REMOTES[remoteName] then
-						local nArgs = select("#", ...)
-						local packed = { ... }
-						local wave = getCurrentWave()
-						local timeOff = getTimeSinceWaveStart(wave)
-						local copied = safeCopyArgs(packed)
+					if typeof(self) == "Instance" and (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction") then
+						local shouldRecord = true
 
-						table.insert(table1.recordedActions, {
-							wave = wave,
-							timeOffset = timeOff,
-							actionType = remoteName,
-							method = method,
-							args = serializeArgs(copied),
-							unitName = nil,
-							unitId = (typeof(packed[1]) == "Instance" and packed[1].Name) or packed[1],
-							remotePath = self:GetFullName(),
-							moneyAtTime = getMoney(),
-							timestamp = os.clock(),
-						})
-
-						if remoteName == "spawn_unit" then
-							table1.lastPlaceArgs = packed
-							table1.lastPlaceTime = os.clock()
+						if method == "InvokeServer" then
+							for i = 1, results.n do
+								if results[i] == false then
+									shouldRecord = false
+									break
+								end
+							end
 						end
 
-						if table1.refreshMacroInfo then
-							task.defer(table1.refreshMacroInfo)
+						if shouldRecord then
+							local remoteName = self.Name
+							local nArgs = select("#", ...)
+							local packed = { ... }
+							local wave = getCurrentWave()
+							local timeOff = getTimeSinceWaveStart(wave)
+							local copied = safeCopyArgs(packed)
+
+							table.insert(table1.recordedActions, {
+								wave = wave,
+								timeOffset = timeOff,
+								actionType = remoteName,
+								method = method,
+								args = serializeArgs(copied),
+								unitName = nil,
+								unitId = (typeof(packed[1]) == "Instance" and packed[1].Name) or packed[1],
+								remotePath = self:GetFullName(),
+								moneyAtTime = getMoney(),
+								timestamp = os.clock(),
+							})
+
+							if remoteName == "spawn_unit" then
+								table1.lastPlaceArgs = packed
+								table1.lastPlaceTime = os.clock()
+							end
+
+							if table1.refreshMacroInfo then
+								task.defer(table1.refreshMacroInfo)
+							end
 						end
 					end
 				end
@@ -2643,14 +2649,32 @@ do
 		return true
 	end
 
-	local function getRemoteByName(name)
+	local function resolveRemote(entry)
+		-- 1) try by name under endpoints.client_to_server
 		local ep = safeGetEndpoints()
-		if not ep then return nil end
-		return ep:FindFirstChild(name)
+		if ep then
+			local r = ep:FindFirstChild(entry.actionType)
+			if r then return r end
+		end
+		-- 2) try full path
+		if type(entry.remotePath) == "string" and entry.remotePath ~= "" then
+			local cur = game
+			for part in string.gmatch(entry.remotePath, "[^%.]+") do
+				if cur then
+					cur = cur:FindFirstChild(part)
+				else
+					break
+				end
+			end
+			if cur and (cur:IsA("RemoteEvent") or cur:IsA("RemoteFunction")) then
+				return cur
+			end
+		end
+		return nil
 	end
 
 	local function callRemote(entry)
-		local remote = getRemoteByName(entry.actionType)
+		local remote = resolveRemote(entry)
 		if not remote then return false end
 		local args = deserializeArgs(entry.args or {})
 		table1.macroIgnoreReplay = true
@@ -2660,13 +2684,14 @@ do
 				return remote:InvokeServer(table.unpack(args))
 			end)
 			if ok then
+				-- treat false as failure for the important unit remotes
 				if entry.actionType == "spawn_unit"
 					or entry.actionType == "upgrade_unit_ingame"
 					or entry.actionType == "sell_unit_ingame"
 				then
 					success = (result == true)
 				else
-					success = true
+					success = (result ~= false)
 				end
 			end
 		elseif remote:IsA("RemoteEvent") then
@@ -2719,8 +2744,11 @@ do
 		end
 		if #table1.recordedActions == 0 then return end
 		table1.replaying = true
+
 		if table1.macroSettings.autovotestart then
-			local voteRemote = getRemoteByName("vote_start")
+			local voteRemote = nil
+			local ep = safeGetEndpoints()
+			if ep then voteRemote = ep:FindFirstChild("vote_start") end
 			if voteRemote and voteRemote:IsA("RemoteFunction") then
 				table1.macroIgnoreReplay = true
 				pcall(function()
@@ -2729,6 +2757,7 @@ do
 				table1.macroIgnoreReplay = false
 			end
 		end
+
 		local startWave = getCurrentWave()
 		onWaveChanged(startWave)
 		local actionsByWave = {}
@@ -2744,6 +2773,7 @@ do
 			table.insert(waves, w)
 		end
 		table.sort(waves)
+
 		task.spawn(function()
 			if table1.macroSettings.startupdelay and table1.macroSettings.startupdelay > 0 then
 				task.wait(table1.macroSettings.startupdelay)
@@ -3223,7 +3253,7 @@ do
 			table.insert(lines, string.format("--- %d actions ---", #actions))
 
 			if #actions == 0 then
-				table.insert(lines, "(empty - press REC then place/upgrade/sell/attack)")
+				table.insert(lines, "(empty - press REC then play normally)")
 			else
 				local byWave = {}
 				for _, act in ipairs(actions) do
@@ -3261,7 +3291,7 @@ do
 			table1.macroInfoLogBox.Text = logText
 			table1.macroInfoLogBox.MultiLine = true
 			table1.macroInfoLogBox.TextWrapped = true
-			local logH = math.max(72, math.min(260, (#lines + 2) * 14))
+			local logH = math.max(72, math.min(280, (#lines + 2) * 14))
 			table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, logH)
 			local totalH = 194 + logH + 12
 			if st then
@@ -3318,7 +3348,6 @@ end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
-
 
 
 -- beginning of absolute idk what i coded music stuff, dont touch 
