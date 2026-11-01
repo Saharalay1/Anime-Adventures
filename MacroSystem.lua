@@ -66,6 +66,119 @@ do
 		return n
 	end
 
+	-- JSON-safe arg packing (Instances / Vector3 / etc. break JSONEncode otherwise)
+	local function serializeValue(v)
+		local t = typeof(v)
+		if t == "nil" then
+			return { __t = "nil" }
+		elseif t == "number" or t == "string" or t == "boolean" then
+			return v
+		elseif t == "Instance" then
+			return { __t = "Instance", path = v:GetFullName(), className = v.ClassName, name = v.Name }
+		elseif t == "Vector3" then
+			return { __t = "Vector3", x = v.X, y = v.Y, z = v.Z }
+		elseif t == "Vector2" then
+			return { __t = "Vector2", x = v.X, y = v.Y }
+		elseif t == "CFrame" then
+			return { __t = "CFrame", c = { v:GetComponents() } }
+		elseif t == "Color3" then
+			return { __t = "Color3", r = v.R, g = v.G, b = v.B }
+		elseif t == "table" then
+			local out = {}
+			for k, vv in pairs(v) do
+				out[tostring(k)] = serializeValue(vv)
+			end
+			out.__t = "table"
+			out.__arr = (#v > 0)
+			if out.__arr then
+				local arr = { __t = "array" }
+				for i = 1, #v do
+					arr[i] = serializeValue(v[i])
+				end
+				return arr
+			end
+			return out
+		else
+			return { __t = "string", v = tostring(v) }
+		end
+	end
+
+	local function serializeArgs(args)
+		local out = { __t = "array" }
+		for i = 1, #args do
+			out[i] = serializeValue(args[i])
+		end
+		out.n = #args
+		return out
+	end
+
+	local function deserializeValue(v)
+		if type(v) ~= "table" then
+			return v
+		end
+		local t = v.__t
+		if t == "nil" then
+			return nil
+		elseif t == "Instance" then
+			local cur = game
+			for part in string.gmatch(v.path or "", "[^%.]+") do
+				if cur then
+					cur = cur:FindFirstChild(part)
+				end
+			end
+			return cur
+		elseif t == "Vector3" then
+			return Vector3.new(v.x or 0, v.y or 0, v.z or 0)
+		elseif t == "Vector2" then
+			return Vector2.new(v.x or 0, v.y or 0)
+		elseif t == "CFrame" then
+			local c = v.c or {}
+			return CFrame.new(table.unpack(c))
+		elseif t == "Color3" then
+			return Color3.new(v.r or 0, v.g or 0, v.b or 0)
+		elseif t == "array" then
+			local out = {}
+			for i = 1, (v.n or #v) do
+				if v[i] ~= nil then
+					out[i] = deserializeValue(v[i])
+				end
+			end
+			return out
+		elseif t == "table" then
+			local out = {}
+			for k, vv in pairs(v) do
+				if k ~= "__t" and k ~= "__arr" then
+					out[k] = deserializeValue(vv)
+				end
+			end
+			return out
+		elseif t == "string" then
+			return v.v
+		end
+		-- plain array-like without __t
+		if v.n or #v > 0 then
+			local out = {}
+			for i = 1, (v.n or #v) do
+				out[i] = deserializeValue(v[i])
+			end
+			return out
+		end
+		return v
+	end
+
+	local function deserializeArgs(args)
+		if type(args) ~= "table" then return {} end
+		if args.__t == "array" or args.n then
+			local out = {}
+			for i = 1, (args.n or #args) do
+				out[i] = deserializeValue(args[i])
+			end
+			return out
+		end
+		return deserializeValue(args)
+	end
+
+
 	local function getMoney()
 		local ok, gui = pcall(function()
 			return table1.player.PlayerGui.spawn_units.Lives.Frame.Resource.Money
@@ -215,14 +328,15 @@ do
 								args[i] = packed[i]
 							end
 							local wave = getCurrentWave()
+							local copied = safeCopyArgs(args)
 							table.insert(table1.recordedActions, {
 								wave = wave,
 								timeOffset = getTimeSinceWaveStart(wave),
 								actionType = remoteName,
 								method = method,
-								args = safeCopyArgs(args),
+								args = serializeArgs(copied),
 								unitName = nil,
-								unitId = args[1],
+								unitId = (typeof(args[1]) == "Instance" and args[1].Name) or args[1],
 								remotePath = remoteSelf:GetFullName(),
 								moneyAtTime = getMoney(),
 								timestamp = os.clock(),
@@ -231,6 +345,9 @@ do
 							if remoteName == "spawn_unit" then
 								table1.lastPlaceArgs = args
 								table1.lastPlaceTime = os.clock()
+							end
+							if table1.refreshMacroInfo then
+								table1.refreshMacroInfo()
 							end
 						end)
 					end)
@@ -290,16 +407,39 @@ do
 	function table1.saveMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
 		ensureMacroFolder()
+		-- always dump the live temporary recording (actions + wave + timeOffset + remotes)
+		local actionsOut = {}
+		for i, act in ipairs(table1.recordedActions or {}) do
+			actionsOut[i] = {
+				wave = act.wave,
+				timeOffset = act.timeOffset,
+				actionType = act.actionType,
+				method = act.method,
+				args = act.args,
+				unitName = act.unitName,
+				unitId = act.unitId,
+				remotePath = act.remotePath,
+				moneyAtTime = act.moneyAtTime,
+				result = act.result,
+			}
+		end
 		local data = {
 			name = name,
 			created = os.time(),
 			settings = deepCopy(table1.macroSettings),
-			actions = deepCopy(table1.recordedActions),
+			actions = actionsOut,
+			actionCount = #actionsOut,
 		}
-		local ok = pcall(function()
-			writefile(macroFilePath(name), table1.HttpService:JSONEncode(data))
+		local okEncode, jsonOrErr = pcall(function()
+			return table1.HttpService:JSONEncode(data)
 		end)
-		if not ok then return false end
+		if not okEncode or type(jsonOrErr) ~= "string" then
+			return false
+		end
+		local okWrite = pcall(function()
+			writefile(macroFilePath(name), jsonOrErr)
+		end)
+		if not okWrite then return false end
 		table1.currentMacroName = name
 		return true
 	end
@@ -363,7 +503,7 @@ do
 	local function callRemote(entry)
 		local remote = getRemoteByName(entry.actionType)
 		if not remote then return false end
-		local args = entry.args or {}
+		local args = deserializeArgs(entry.args or {})
 		table1.macroIgnoreReplay = true
 		local success = false
 		if entry.method == "InvokeServer" and remote:IsA("RemoteFunction") then
@@ -838,41 +978,118 @@ do
 		end
 	end)
 
-	-- Macro Info: unlocked textboxes, hide when folded
-	table1.macroInfoToggle, table1.macroInfoChanged,
-		table1.macroInfoWaveBox, table1.macroInfoTimeBox, table1.macroInfoMoneyBox,
-		table1.macroInfoNameBox2, table1.macroInfoStatusBox, table1.macroInfoLogBox =
-		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 6)
+	-- Macro Info: 1 Refresh + manually placed textboxes (all visible when expanded)
+	table1.macroInfoToggle, table1.macroInfoChanged =
+		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
-	local infoBoxes = {
-		table1.macroInfoWaveBox,
-		table1.macroInfoTimeBox,
-		table1.macroInfoMoneyBox,
-		table1.macroInfoNameBox2,
-		table1.macroInfoStatusBox,
-		table1.macroInfoLogBox,
-	}
-	local placeholders = { "Wave", "Time on wave", "Money", "Macro name", "Status", "Action log" }
-	for i, box in ipairs(infoBoxes) do
-		if box then
-			pcall(function()
-				box:SetAttribute("Numberlocked", false)
-				box:SetAttribute("preventchange", true)
-			end)
-			box.PlaceholderText = placeholders[i]
-			box.Text = placeholders[i]
-			box.ClearTextOnFocus = false
-		end
+	table1.macroInfoToggle.ClipsDescendants = true
+
+	local function makeInfoBox(name, y)
+		local box = Instance.new("TextBox")
+		box.Name = name
+		box.Size = UDim2.new(1, -12, 0, 22)
+		box.Position = UDim2.new(0, 6, 0, y)
+		box.BackgroundColor3 = table1.tabinactive
+		box.BackgroundTransparency = 0.35
+		box.BorderSizePixel = 0
+		box.TextColor3 = table1.white
+		box.Font = table1.font
+		box.TextSize = 12
+		box.TextXAlignment = Enum.TextXAlignment.Left
+		box.ClearTextOnFocus = false
+		box.TextEditable = false
+		box.ZIndex = 15
+		box.Visible = true
+		box.Parent = table1.macroInfoToggle
+		pcall(function()
+			box:SetAttribute("Numberlocked", false)
+			box:SetAttribute("preventchange", true)
+		end)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, 4)
+		c.Parent = box
+		return box
 	end
+
+	-- stacked so every line is on-screen (header ~28, refresh row ~26, then boxes)
+	table1.macroInfoWaveBox = makeInfoBox("MacroInfoWave", 64)
+	table1.macroInfoTimeBox = makeInfoBox("MacroInfoTime", 90)
+	table1.macroInfoMoneyBox = makeInfoBox("MacroInfoMoney", 116)
+	table1.macroInfoNameBox2 = makeInfoBox("MacroInfoName", 142)
+	table1.macroInfoStatusBox = makeInfoBox("MacroInfoStatus", 168)
+	table1.macroInfoLogBox = makeInfoBox("MacroInfoLog", 194)
+	table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, 48)
+	table1.macroInfoLogBox.TextWrapped = true
+	table1.macroInfoLogBox.MultiLine = true
+	table1.macroInfoLogBox.TextYAlignment = Enum.TextYAlignment.Top
+
+	table1.macroInfoWaveBox.Text = "Wave: -"
+	table1.macroInfoTimeBox.Text = "Time on wave: -"
+	table1.macroInfoMoneyBox.Text = "Money: -"
+	table1.macroInfoNameBox2.Text = "Macro: (temporary)"
+	table1.macroInfoStatusBox.Text = "Rec:off Replay:off Actions:0"
+	table1.macroInfoLogBox.Text = "Action log (empty)"
+
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
+		local totalH = 194 + 72 + 12
 		if st then
-			st.normalHeight = 220
-			table1.macroInfoToggle:SetAttribute("LayoutHeight", 220)
+			st.normalHeight = totalH
+			table1.macroInfoToggle:SetAttribute("LayoutHeight", totalH)
 			if not st.folded then
-				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 220)
+				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
+			end
+			if st.relayout then
+				st.relayout()
 			end
 		end
+	end
+
+	table1.macroInfoSetFolded = function(folded)
+		local boxes = {
+			table1.macroInfoWaveBox,
+			table1.macroInfoTimeBox,
+			table1.macroInfoMoneyBox,
+			table1.macroInfoNameBox2,
+			table1.macroInfoStatusBox,
+			table1.macroInfoLogBox,
+		}
+		for _, box in ipairs(boxes) do
+			if box then
+				box.Visible = not folded
+			end
+		end
+		local st = table1.maintoggleState[table1.macroInfoToggle]
+		if st then
+			st.folded = folded
+		end
+	end
+
+	-- hide content whenever fold button is used
+	do
+		local st = table1.maintoggleState[table1.macroInfoToggle]
+		if st and st.fold and st.fold:IsA("GuiButton") then
+			st.fold.MouseButton1Click:Connect(function()
+				task.defer(function()
+					local s2 = table1.maintoggleState[table1.macroInfoToggle]
+					local isFolded = false
+					if s2 then
+						isFolded = s2.folded == true
+						-- also treat short height as folded
+						if table1.macroInfoToggle.Size.Y.Offset <= (table1.toggleheight or 25) + 8 then
+							isFolded = true
+						end
+					end
+					table1.macroInfoSetFolded(isFolded)
+				end)
+			end)
+		end
+		-- size change watcher (covers any fold path)
+		table1.macroInfoToggle:GetPropertyChangedSignal("Size"):Connect(function()
+			local h = table1.macroInfoToggle.Size.Y.Offset
+			local folded = h <= (table1.toggleheight or 25) + 10
+			table1.macroInfoSetFolded(folded)
+		end)
 	end
 
 	table1.refreshMacroInfo = function()
@@ -881,13 +1098,14 @@ do
 			table1.waveStartTimes[wave] = os.clock()
 		end
 		local st = table1.maintoggleState[table1.macroInfoToggle]
-		local folded = st and st.folded
-		for _, box in ipairs(infoBoxes) do
-			if box then
-				box.Visible = not folded
-			end
+		local folded = (st and st.folded == true)
+			or (table1.macroInfoToggle.Size.Y.Offset <= (table1.toggleheight or 25) + 10)
+		if table1.macroInfoSetFolded then
+			table1.macroInfoSetFolded(folded)
 		end
-		if folded then return end
+		if folded then
+			return
+		end
 		if table1.macroInfoWaveBox then
 			table1.macroInfoWaveBox.Text = "Wave: " .. tostring(wave)
 		end
@@ -909,11 +1127,15 @@ do
 			)
 		end
 		if table1.macroInfoLogBox then
+			local actions = table1.recordedActions or {}
 			local lines = {}
+			table.insert(lines, string.format("--- %d actions (temporary/saved) ---", #actions))
 			local byWave = {}
-			for _, act in ipairs(table1.recordedActions) do
-				byWave[act.wave] = byWave[act.wave] or {}
-				table.insert(byWave[act.wave], act)
+			for _, act in ipairs(actions) do
+				local w = act.wave
+				if w == nil then w = 0 end
+				byWave[w] = byWave[w] or {}
+				table.insert(byWave[w], act)
 			end
 			local waves = {}
 			for w in pairs(byWave) do
@@ -921,17 +1143,46 @@ do
 			end
 			table.sort(waves)
 			for _, w in ipairs(waves) do
-				table.insert(lines, "W" .. tostring(w))
+				table.insert(lines, "")
+				table.insert(lines, string.format("== Wave %s ==", tostring(w)))
 				for _, act in ipairs(byWave[w]) do
+					local label = tostring(act.unitName or act.unitId or "")
+					if label ~= "" then label = " | " .. label end
 					table.insert(lines, string.format(
-						"%.1f %s %s",
-						act.timeOffset or 0,
-						act.actionType,
-						tostring(act.unitName or act.unitId or "")
+						"  +%.2fs  %s%s",
+						tonumber(act.timeOffset) or 0,
+						tostring(act.actionType or "?"),
+						label
 					))
 				end
 			end
-			table1.macroInfoLogBox.Text = (#lines > 0) and table.concat(lines, " | ") or "Action log (empty)"
+			local logText = table.concat(lines, "\n")
+			table1.macroInfoLogBox.Text = logText
+			table1.macroInfoLogBox.MultiLine = true
+			table1.macroInfoLogBox.TextWrapped = true
+			local logH = math.max(72, math.min(220, (#lines + 1) * 15))
+			table1.macroInfoLogBox.Size = UDim2.new(1, -12, 0, logH)
+			local totalH = 194 + logH + 12
+			if st then
+				st.normalHeight = totalH
+				table1.macroInfoToggle:SetAttribute("LayoutHeight", totalH)
+				if not st.folded then
+					table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, totalH)
+				end
+				if st.relayout then
+					st.relayout()
+				end
+			end
+			if table1.mainpage and table1.mainpage:IsA("ScrollingFrame") then
+				local maxY = 0
+				for _, ch in ipairs(table1.mainpage:GetChildren()) do
+					if ch:IsA("GuiObject") and ch:GetAttribute("Maintoggle") then
+						local bottom = ch.Position.Y.Offset + ch.Size.Y.Offset
+						if bottom > maxY then maxY = bottom end
+					end
+				end
+				table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, math.max(maxY + 80, (table1.frameheight - 80) * 12))
+			end
 		end
 	end
 
@@ -942,14 +1193,7 @@ do
 	task.spawn(function()
 		while table1.maingui and table1.maingui.Parent do
 			if table1.macroInfoToggle and table1.macroInfoToggle.Parent then
-				local st = table1.maintoggleState[table1.macroInfoToggle]
-				if st and not st.folded then
-					table1.refreshMacroInfo()
-				else
-					for _, box in ipairs(infoBoxes) do
-						if box then box.Visible = false end
-					end
-				end
+				table1.refreshMacroInfo()
 			end
 			task.wait(0.5)
 		end
