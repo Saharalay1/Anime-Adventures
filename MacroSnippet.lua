@@ -1,1 +1,2 @@
--- see local MacroSnippet.lua (~30k). Full content pushed via follow-up if needed.
+-- FULL FILE: use chat download MacroSnippet.lua (29855 bytes). Connector truncates large bodies.
+-- Features: FEMBOY/macroconfigs disk, hookmetamethod log (false skipped), temporary buffer, textbox info, LayoutOrder 1-8, no relayout override.
