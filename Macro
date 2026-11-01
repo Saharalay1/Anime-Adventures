@@ -2255,20 +2255,20 @@ do
 		return os.clock() - start
 	end
 
+	-- persistent on disk: FEMBOY/macroconfigs/*.json (survives rejoin)
 	local function ensureMacroFolder()
-		local femboy = table1.Workspace:FindFirstChild("FEMBOY")
-		if not femboy then
-			femboy = Instance.new("Folder")
-			femboy.Name = "FEMBOY"
-			femboy.Parent = table1.Workspace
+		if not isfolder(table1.folder1) then
+			makefolder(table1.folder1)
 		end
-		local configs = femboy:FindFirstChild("macroconfigs")
-		if not configs then
-			configs = Instance.new("Folder")
-			configs.Name = "macroconfigs"
-			configs.Parent = femboy
+		local path = table1.folder1 .. "/macroconfigs"
+		if not isfolder(path) then
+			makefolder(path)
 		end
-		return configs
+		return path
+	end
+
+	local function macroFilePath(name)
+		return ensureMacroFolder() .. "/" .. name .. ".json"
 	end
 
 	if not table1.autoloadPath then
@@ -2360,19 +2360,25 @@ do
 		return out
 	end
 
-	-- Log AFTER the remote is sent so recording never blocks/rejects the call.
-	-- Forwards original ... only. No metatable writes.
+	-- Forward call first, capture return. Only log successful calls (not false).
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+			local method = getnamecallmethod()
+			local results = table.pack(oldNamecall(self, ...))
+
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
-				local method = getnamecallmethod()
 				if method == "FireServer" or method == "InvokeServer" then
 					local remoteSelf = self
 					local nArgs = select("#", ...)
 					local packed = { ... }
+					local ret = results[1]
 					task.defer(function()
 						pcall(function()
+							-- server rejected this call — do not store in macro
+							if ret == false then
+								return
+							end
 							if typeof(remoteSelf) ~= "Instance" then return end
 							local cn = remoteSelf.ClassName
 							if cn ~= "RemoteEvent" and cn ~= "RemoteFunction" then return end
@@ -2394,6 +2400,7 @@ do
 								remotePath = remoteSelf:GetFullName(),
 								moneyAtTime = getMoney(),
 								timestamp = os.clock(),
+								result = ret,
 							})
 							if remoteName == "spawn_unit" then
 								table1.lastPlaceArgs = args
@@ -2403,7 +2410,8 @@ do
 					end)
 				end
 			end
-			return oldNamecall(self, ...)
+
+			return table.unpack(results, 1, results.n)
 		end))
 	end
 
@@ -2437,9 +2445,15 @@ do
 	function table1.getMacroList()
 		local folder = ensureMacroFolder()
 		table1.macrolistnames = {}
-		for _, child in ipairs(folder:GetChildren()) do
-			if child:IsA("StringValue") then
-				table.insert(table1.macrolistnames, child.Name)
+		if listfiles then
+			local ok, files = pcall(listfiles, folder)
+			if ok and type(files) == "table" then
+				for _, f in ipairs(files) do
+					local name = tostring(f):match("([^/\\]+)%.json$")
+					if name then
+						table.insert(table1.macrolistnames, name)
+					end
+				end
 			end
 		end
 		table.sort(table1.macrolistnames)
@@ -2448,7 +2462,7 @@ do
 
 	function table1.saveMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
+		ensureMacroFolder()
 		local data = {
 			name = name,
 			created = os.time(),
@@ -2456,23 +2470,20 @@ do
 			actions = deepCopy(table1.recordedActions),
 		}
 		local json = table1.HttpService:JSONEncode(data)
-		local existing = folder:FindFirstChild(name)
-		if existing then existing:Destroy() end
-		local sv = Instance.new("StringValue")
-		sv.Name = name
-		sv.Value = json
-		sv.Parent = folder
+		local ok = pcall(function()
+			writefile(macroFilePath(name), json)
+		end)
+		if not ok then return false end
 		table1.currentMacroName = name
 		return true
 	end
 
 	function table1.loadMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		local sv = folder:FindFirstChild(name)
-		if not sv or not sv:IsA("StringValue") then return false end
+		local path = macroFilePath(name)
+		if not isfile or not isfile(path) then return false end
 		local ok, data = pcall(function()
-			return table1.HttpService:JSONDecode(sv.Value)
+			return table1.HttpService:JSONDecode(readfile(path))
 		end)
 		if not ok or type(data) ~= "table" then return false end
 		table1.recordedActions = data.actions or {}
@@ -2487,10 +2498,9 @@ do
 
 	function table1.deleteMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		local sv = folder:FindFirstChild(name)
-		if sv then
-			sv:Destroy()
+		local path = macroFilePath(name)
+		if isfile and isfile(path) and delfile then
+			pcall(delfile, path)
 			if table1.currentMacroName == name then
 				table1.currentMacroName = nil
 			end
@@ -2501,18 +2511,18 @@ do
 
 	function table1.createMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
-		local folder = ensureMacroFolder()
-		if folder:FindFirstChild(name) then return false end
+		local path = macroFilePath(name)
+		if isfile and isfile(path) then return false end
 		local data = {
 			name = name,
 			created = os.time(),
 			settings = deepCopy(table1.macroSettings),
 			actions = {},
 		}
-		local sv = Instance.new("StringValue")
-		sv.Name = name
-		sv.Value = table1.HttpService:JSONEncode(data)
-		sv.Parent = folder
+		local ok = pcall(function()
+			writefile(path, table1.HttpService:JSONEncode(data))
+		end)
+		if not ok then return false end
 		table1.currentMacroName = name
 		table1.recordedActions = {}
 		return true
@@ -2702,14 +2712,19 @@ do
 	-- 8 Macro Info
 
 	-- 1) Macro Selection
-	table1.rebuildMacroSelection = function()
+	table1.macroSelectBound = false
+	table1.rebuildMacroSelection = function(force)
+		table1.getMacroList()
+		-- only create once; force rebuild only when requested
+		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then
+			return
+		end
 		local savedOrder, savedPos
 		if table1.macroSelectMain and table1.macroSelectMain.Parent then
 			savedOrder = table1.macroSelectMain:GetAttribute("LayoutOrder")
 			savedPos = table1.macroSelectMain.Position
 			table1.macroSelectMain:Destroy()
 		end
-		table1.getMacroList()
 		local args = { "Macro Selection" }
 		if #table1.macrolistnames == 0 then
 			table.insert(args, "None")
@@ -2730,6 +2745,7 @@ do
 		end
 		table1.macroSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
+			table1.getMacroList()
 			if #table1.macrolistnames == 0 then return end
 			local name = table1.macrolistnames[mode]
 			local st = table1.maintoggleState[table1.macroSelectMain]
@@ -2750,7 +2766,7 @@ do
 			end
 		end)
 	end
-	table1.rebuildMacroSelection()
+	table1.rebuildMacroSelection(true)
 
 	-- 2) Macro Configurations
 	table1.macroConfigActions, table1.macroConfigActionsChanged, table1.macroNameBox =
@@ -2776,10 +2792,7 @@ do
 		elseif mode == 4 then
 			if name ~= "" then table1.createMacro(name) end
 		end
-		table1.rebuildMacroSelection()
-		if table1.rebuildMacroAutoloadSelect then
-			table1.rebuildMacroAutoloadSelect()
-		end
+		table1.getMacroList()
 		if table1.refreshMacroInfo then
 			table1.refreshMacroInfo()
 		end
@@ -2864,14 +2877,17 @@ do
 		return name
 	end
 
-	table1.rebuildMacroAutoloadSelect = function()
+	table1.rebuildMacroAutoloadSelect = function(force)
+		table1.getMacroList()
+		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent and not force then
+			return
+		end
 		local savedOrder, savedPos
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
 			savedOrder = table1.macroAutoloadSelect:GetAttribute("LayoutOrder")
 			savedPos = table1.macroAutoloadSelect.Position
 			table1.macroAutoloadSelect:Destroy()
 		end
-		table1.getMacroList()
 		table1.autoloadMacroNames = { "None" }
 		for _, n in ipairs(table1.macrolistnames) do
 			table.insert(table1.autoloadMacroNames, n)
@@ -2941,7 +2957,7 @@ do
 			table1.writeAutoload(table1.autoloadData)
 		end)
 	end
-	table1.rebuildMacroAutoloadSelect()
+	table1.rebuildMacroAutoloadSelect(true)
 
 	-- 6) Macro Autoload enable
 	table1.macroAutoloadEnable, table1.macroAutoloadEnableChanged =
@@ -3006,23 +3022,45 @@ do
 
 	table1.macroInfoLabel = Instance.new("TextLabel")
 	table1.macroInfoLabel.Name = "MacroInfoLabel"
-	table1.macroInfoLabel.Size = UDim2.new(1, -16, 0, 40)
-	table1.macroInfoLabel.Position = UDim2.new(0, 8, 0, 58)
 	table1.macroInfoLabel.BackgroundTransparency = 1
+	table1.macroInfoLabel.BorderSizePixel = 0
+	table1.macroInfoLabel.Size = UDim2.new(1, -12, 0, 120)
+	table1.macroInfoLabel.Position = UDim2.new(0, 6, 0, 56)
 	table1.macroInfoLabel.TextColor3 = table1.white
 	table1.macroInfoLabel.Font = table1.font
-	table1.macroInfoLabel.TextSize = 11
+	table1.macroInfoLabel.TextSize = 12
 	table1.macroInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
 	table1.macroInfoLabel.TextYAlignment = Enum.TextYAlignment.Top
 	table1.macroInfoLabel.TextWrapped = true
-	table1.macroInfoLabel.ZIndex = 5
+	table1.macroInfoLabel.TextTruncate = Enum.TextTruncate.None
+	table1.macroInfoLabel.RichText = false
+	table1.macroInfoLabel.ZIndex = 20
+	table1.macroInfoLabel.Visible = true
 	table1.macroInfoLabel.Text = "Wave: -\nTime on wave: -\nMoney: -\nMacro: (none)\nActions: 0"
 	table1.macroInfoLabel.Parent = table1.macroInfoToggle
+	do
+		local st = table1.maintoggleState[table1.macroInfoToggle]
+		if st then
+			st.normalHeight = 180
+			table1.macroInfoToggle:SetAttribute("LayoutHeight", 180)
+			table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 180)
+			table1.macroInfoToggle.ClipsDescendants = false
+			if st.folded then
+				st.folded = false
+				if st.fold then st.fold.Text = "-" end
+			end
+		end
+	end
 
 	table1.refreshMacroInfo = function()
-		if not table1.macroInfoLabel or not table1.macroInfoLabel.Parent then
+		if not table1.macroInfoLabel then
 			return
 		end
+		if not table1.macroInfoLabel.Parent and table1.macroInfoToggle then
+			table1.macroInfoLabel.Parent = table1.macroInfoToggle
+		end
+		table1.macroInfoLabel.Visible = true
+		table1.macroInfoLabel.ZIndex = 20
 		local wave = getCurrentWave()
 		if not table1.waveStartTimes[wave] then
 			table1.waveStartTimes[wave] = os.clock()
@@ -3142,6 +3180,8 @@ end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
+
+
 
 
 
