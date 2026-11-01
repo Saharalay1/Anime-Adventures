@@ -1,0 +1,108 @@
+NOTES — Anime Adventures Macro + Reze Hub Integration
+=====================================================
+
+SOURCE
+- Original hub: https://github.com/Saharalay1/Anime-Adventures/blob/main/Macro
+- Title shown: "Reze is fineeeee v2.2"
+- ~12108 lines, pure client Lua, uses executor filesystem (writefile/readfile/isfolder/makefolder/listfiles)
+
+CORE STRUCTURE
+- Everything lives in table1
+- table1.folder1 = "FEMBOY"  (root for songs + configs on executor FS)
+- table1.maingui = ScreenGui
+- table1.frame = main window Frame
+- Tabs created with table1.createtab(name, position) → returns button, page (ScrollingFrame)
+- Default open tab: Main (table1.mainpage)
+
+IMPORTANT TABS
+- Main          → table1.mainpage          (game-specific features go here)
+- General       → table1.generall
+- Teleport      → table1.teleportttttttt
+- Velocity      → table1.velocityyyyyyyy
+- ESP, Aimbot, Hitbox, Misc, Lighting, Music, Settings, UI Settings, About
+
+MAINTOGGLE
+Signature (modern):
+  local main, changedEvent, [actionEvent], ...valueBoxes =
+    table1.maintoggle(
+      "Title",
+      "Mode1", "Mode2", ...,
+      scale,
+      parentPage,
+      animate,
+      modeType,
+      textboxCount,
+      [actionCount]
+    )
+
+- Returns actionEvent only when actionflag is set (last numeric arg)
+- state stored in table1.maintoggleState[main]
+- Mode stored as attribute: main:GetAttribute("Mode") / :SetAttribute("Mode", n)
+- Foldable via state.fold / state.folded
+- table1.foldAllMaintoggles() collapses everything at end of script
+
+ACTION BUTTONS
+- Created when actionflag=1
+- Example (WalkSpeed):
+  table1.walkspeedtoggle, table1.walkspeedchanged, table1.walkspeedaction, table1.walkspeedvalue =
+    table1.maintoggle("WalkSpeed", "On", 1, table1.generall, true, 0, 1, 1)
+- actionEvent fires on press/release according to hold/press setting
+
+CONFIG SYSTEM (Reze)
+- Path: FEMBOY/configs/*.json on executor filesystem
+- Completely separate from macro configs
+
+MACRO SYSTEM
+- Lives entirely under Main tab
+- Temporary recording buffer: table1.recordedActions (in-memory only)
+- Destroyed when client starts a new recording or leaves the game
+- Permanent macros saved as JSON StringValues under Workspace.FEMBOY.macroconfigs
+- Completely independent of FEMBOY/configs
+
+MACRO API
+- table1.startRecording() / table1.stopRecording() (toggled by one action button REC)
+- table1.saveMacro(name)
+- table1.loadMacro(name)
+- table1.deleteMacro(name)
+- table1.listMacros()
+- table1.replayMacro(name or nil)
+- table1.stopReplay()
+- table1.clearTemporaryMacro()
+
+RECORDING
+- Hooks __namecall for FireServer / InvokeServer
+- Only logs: spawn_unit, upgrade_unit_ingame, sell_unit_ingame, change_priority, use_active_attack, vote_start
+- Ignores UnreliableRemoteEvent
+- Stores exact args, wave number, timeOffset since wave start, unitId, moneyAtTime
+- On spawn_unit: listens ChildAdded on Workspace._UNITS to stamp unitName
+
+REPLAY
+- wavebasedtime true → wait recorded timeOffset after wave start
+- false → spam in order as soon as wave is current
+- place / upgrade / sell → spam until return value == true
+- use_active_attack → keep trying
+- skipfailuresandmoveontothenextwave → abandon remaining actions of old wave
+- autovotestart → auto InvokeServer vote_start at beginning of replay
+
+SETTINGS (table1.macroSettings)
+- failureretry, skipfailuresandmoveontothenextwave, wavebasedtime, autovotestart, startupdelay, spaminterval, maxspamattempts
+
+UI ON MAIN TAB
+- One action-button maintoggle: Record Macro (toggles start/stop)
+- Info maintoggle (foldable)
+- Macro name textbox + Save / Load / Delete / Replay / Stop Replay
+- Settings toggles for wave based time, auto vote start, skip failures
+
+PATHS
+- Workspace._wave_num
+- Workspace._UNITS
+- ReplicatedStorage.endpoints.client_to_server.*
+- Players.LocalPlayer.PlayerGui.spawn_units.Lives.Frame.Resource.Money.Text
+
+REMINDERS
+- Macro configs ≠ Reze configs
+- No prints
+- Leave all pre-existing comments untouched
+- Action button only for record start/stop
+- Everything macro-related parents to table1.mainpage
+- Reuses table1.Players, table1.Workspace, table1.HttpService, table1.RunService, table1.player, table1.white, table1.font
