@@ -2167,6 +2167,7 @@ table1.selecttab(table1.mainbutton, table1.mainpage) -- main tab is open by defa
 -- local example, exampleChanged, exampleValue, exampleValue2 = table1.maintoggle("exampletitle","example toggle", "example toggle2", 1, Main, true, 0, 2)
 -- youre also able to prevent a textbox from only being able to type numbers to false if you set the attribute Numberlocked to false, you can do that by variablename:SetAttribute("Numberlocked", false)
 
+
 -- ============================================================
 -- MACRO SYSTEM — paste right before:
 --   -- beginning of absolute idk what i coded music stuff, dont touch
@@ -2256,9 +2257,13 @@ do
 	end
 
 	local function ensureMacroFolder()
-		if not isfolder(table1.folder1) then makefolder(table1.folder1) end
+		if not isfolder(table1.folder1) then
+			makefolder(table1.folder1)
+		end
 		local path = table1.folder1 .. "/macroconfigs"
-		if not isfolder(path) then makefolder(path) end
+		if not isfolder(path) then
+			makefolder(path)
+		end
 		return path
 	end
 
@@ -2291,8 +2296,9 @@ do
 	end
 	if not table1.writeAutoload then
 		table1.writeAutoload = function(data)
+			local path = table1.autoloadPath()
 			pcall(function()
-				writefile(table1.autoloadPath(), table1.HttpService:JSONEncode({
+				writefile(path, table1.HttpService:JSONEncode({
 					enabled = data.enabled == true,
 					rezeConfig = tostring(data.rezeConfig or ""),
 					macroConfig = tostring(data.macroConfig or ""),
@@ -2314,7 +2320,9 @@ do
 		local w = safeGetWave()
 		if w then
 			onWaveChanged(w.Value)
-			w.Changed:Connect(function(nv) onWaveChanged(nv) end)
+			w.Changed:Connect(function(nv)
+				onWaveChanged(nv)
+			end)
 		end
 	end)
 
@@ -2325,10 +2333,11 @@ do
 			if not table1.recording then return end
 			if not table1.lastPlaceArgs then return end
 			if os.clock() - table1.lastPlaceTime > 1.5 then return end
+			local unitName = child.Name
 			for i = #table1.recordedActions, 1, -1 do
 				local act = table1.recordedActions[i]
 				if act.actionType == "spawn_unit" and not act.unitName then
-					act.unitName = child.Name
+					act.unitName = unitName
 					act.unitInstancePath = child:GetFullName()
 					break
 				end
@@ -2351,6 +2360,7 @@ do
 		return out
 	end
 
+	-- Forward call first, capture return. Only log successful calls (not false).
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -2371,7 +2381,9 @@ do
 							local remoteName = remoteSelf.Name
 							if not ACTION_REMOTES[remoteName] then return end
 							local args = {}
-							for i = 1, nArgs do args[i] = packed[i] end
+							for i = 1, nArgs do
+								args[i] = packed[i]
+							end
 							local wave = getCurrentWave()
 							table.insert(table1.recordedActions, {
 								wave = wave,
@@ -2420,7 +2432,11 @@ do
 	end
 
 	function table1.toggleRecording()
-		if table1.recording then table1.stopRecording() else table1.startRecording() end
+		if table1.recording then
+			table1.stopRecording()
+		else
+			table1.startRecording()
+		end
 	end
 
 	function table1.getMacroList()
@@ -2505,7 +2521,6 @@ do
 		end)
 		if not ok then return false end
 		table1.currentMacroName = name
-		-- create empty file only — keep temporary recording memory intact unless empty create intended
 		return true
 	end
 
@@ -2549,9 +2564,13 @@ do
 		local attempts = 0
 		while attempts < table1.macroSettings.maxspamattempts do
 			if table1.macroSettings.skipfailuresandmoveontothenextwave then
-				if getCurrentWave() > entry.wave then return false end
+				if getCurrentWave() > entry.wave then
+					return false
+				end
 			end
-			if callRemote(entry) then return true end
+			if callRemote(entry) then
+				return true
+			end
 			attempts = attempts + 1
 			task.wait(table1.macroSettings.spaminterval)
 		end
@@ -2567,7 +2586,9 @@ do
 			callRemote(entry)
 			attempts = attempts + 1
 			task.wait(table1.macroSettings.spaminterval)
-			if attempts >= 5 then return true end
+			if attempts >= 5 then
+				return true
+			end
 		end
 		return false
 	end
@@ -2583,7 +2604,9 @@ do
 			local voteRemote = getRemoteByName("vote_start")
 			if voteRemote and voteRemote:IsA("RemoteFunction") then
 				table1.macroIgnoreReplay = true
-				pcall(function() voteRemote:InvokeServer() end)
+				pcall(function()
+					voteRemote:InvokeServer()
+				end)
 				table1.macroIgnoreReplay = false
 			end
 		end
@@ -2598,7 +2621,9 @@ do
 			end
 		end
 		local waves = {}
-		for w in pairs(actionsByWave) do table.insert(waves, w) end
+		for w in pairs(actionsByWave) do
+			table.insert(waves, w)
+		end
 		table.sort(waves)
 		task.spawn(function()
 			if table1.macroSettings.startupdelay and table1.macroSettings.startupdelay > 0 then
@@ -2667,24 +2692,24 @@ do
 		table1.mainpage.CanvasSize = UDim2.new(0, 0, 0, (table1.frameheight - 80) * 20)
 	end
 
-	-- pin helper: never let parent relayout move this toggle
-	local function pinToggle(main, order)
-		if not main then return end
-		main:SetAttribute("LayoutOrder", order)
-		local st = table1.maintoggleState[main]
-		if st then
-			st.relayout = function() end
-		end
-	end
+	-- ORDER:
+	-- 1 Macro Selection
+	-- 2 Macro Configurations
+	-- 3 Macro Replay
+	-- 4 Macro Record
+	-- 5 Macro Autoload Target
+	-- 6 Macro Autoload
+	-- 7 Macro Settings
+	-- 8 Macro Info
 
-	-- 1 Macro Selection (created once; force rebuild only after create/delete)
 	table1.rebuildMacroSelection = function(force)
 		table1.getMacroList()
 		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then
 			return
 		end
-		local savedPos
+		local savedOrder, savedPos
 		if table1.macroSelectMain and table1.macroSelectMain.Parent then
+			savedOrder = table1.macroSelectMain:GetAttribute("LayoutOrder")
 			savedPos = table1.macroSelectMain.Position
 			table1.macroSelectMain:Destroy()
 		end
@@ -2702,30 +2727,38 @@ do
 		table.insert(args, 4)
 		table.insert(args, 0)
 		table1.macroSelectMain, table1.macroSelectChanged = table1.maintoggle(table.unpack(args))
-		pinToggle(table1.macroSelectMain, 1)
-		if savedPos then table1.macroSelectMain.Position = savedPos end
+		table1.macroSelectMain:SetAttribute("LayoutOrder", savedOrder or 1)
+		if savedPos then
+			table1.macroSelectMain.Position = savedPos
+		end
 		table1.macroSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
 			table1.getMacroList()
+			if #table1.macrolistnames == 0 then return end
 			local name = table1.macrolistnames[mode]
 			local st = table1.maintoggleState[table1.macroSelectMain]
 			if st and st.dropdownButtons and st.dropdownButtons[mode] then
 				local t = st.dropdownButtons[mode].Text
-				if t and t ~= "None" then name = t end
+				if t and t ~= "None" then
+					name = t
+				end
 			end
 			if name and name ~= "None" then
-				if table1.macroNameBox then table1.macroNameBox.Text = name end
+				if table1.macroNameBox then
+					table1.macroNameBox.Text = name
+				end
 				table1.loadMacro(name)
-				if table1.refreshMacroInfo then table1.refreshMacroInfo() end
+				if table1.refreshMacroInfo then
+					table1.refreshMacroInfo()
+				end
 			end
 		end)
 	end
 	table1.rebuildMacroSelection(true)
 
-	-- 2 Macro Configurations
 	table1.macroConfigActions, table1.macroConfigActionsChanged, table1.macroNameBox =
 		table1.maintoggle("Macro Configurations", "Save", "Load", "Delete", "Create", 1, table1.mainpage, true, 3, 1)
-	pinToggle(table1.macroConfigActions, 2)
+	table1.macroConfigActions:SetAttribute("LayoutOrder", 2)
 	if table1.macroNameBox then
 		table1.macroNameBox.Text = ""
 		table1.macroNameBox.PlaceholderText = "Macro Name"
@@ -2738,48 +2771,59 @@ do
 		local name = table1.macroNameBox and table1.macroNameBox.Text or ""
 		name = name:gsub("^%s+", ""):gsub("%s+$", "")
 		if mode == 1 then
-			-- Save = write current temporary recording into this macro file
 			if name ~= "" then table1.saveMacro(name) end
 		elseif mode == 2 then
 			if name ~= "" then table1.loadMacro(name) end
 		elseif mode == 3 then
 			if name ~= "" then table1.deleteMacro(name) end
 			table1.rebuildMacroSelection(true)
-			table1.rebuildMacroAutoloadSelect(true)
+			if table1.rebuildMacroAutoloadSelect then
+				table1.rebuildMacroAutoloadSelect(true)
+			end
 		elseif mode == 4 then
 			if name ~= "" then
 				table1.createMacro(name)
 				table1.rebuildMacroSelection(true)
-				table1.rebuildMacroAutoloadSelect(true)
+				if table1.rebuildMacroAutoloadSelect then
+					table1.rebuildMacroAutoloadSelect(true)
+				end
 			end
 		end
-		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
+		if table1.refreshMacroInfo then
+			table1.refreshMacroInfo()
+		end
 	end)
 
-	-- 3 Macro Replay
 	table1.macroReplayToggle, table1.macroReplayChanged =
 		table1.maintoggle("Macro Replay", "Replay", "Stop", 1, table1.mainpage, true, 3, 0)
-	pinToggle(table1.macroReplayToggle, 3)
+	table1.macroReplayToggle:SetAttribute("LayoutOrder", 3)
 	table1.macroReplayChanged:Connect(function(mode)
 		if mode == 1 then
 			local name = table1.macroNameBox and table1.macroNameBox.Text or ""
 			name = name:gsub("^%s+", ""):gsub("%s+$", "")
-			if name ~= "" then table1.replayMacro(name) else table1.replayMacro() end
+			if name ~= "" then
+				table1.replayMacro(name)
+			else
+				table1.replayMacro()
+			end
 		elseif mode == 2 then
 			table1.stopReplay()
 		end
-		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
+		if table1.refreshMacroInfo then
+			table1.refreshMacroInfo()
+		end
 	end)
 
-	-- 4 Record
 	table1.macroRecordToggle, table1.macroRecordChanged, table1.macroRecordAction =
 		table1.maintoggle("Record Macro", "On", 1, table1.mainpage, true, 0, 0, 1)
-	pinToggle(table1.macroRecordToggle, 4)
 	do
 		local st = table1.maintoggleState[table1.macroRecordToggle]
 		if st then
 			st.actiontext = "REC"
-			if st.actiontextbox then st.actiontextbox.Text = "REC" end
+			if st.actiontextbox then
+				st.actiontextbox.Text = "REC"
+			end
+			table1.macroRecordToggle:SetAttribute("LayoutOrder", 4)
 		end
 	end
 	if table1.macroRecordAction then
@@ -2798,18 +2842,42 @@ do
 	end
 	table1.macroRecordChanged:Connect(function()
 		local mode = table1.macroRecordToggle:GetAttribute("Mode") or 0
-		if mode == 1 and not table1.recording then table1.startRecording()
-		elseif mode == 0 and table1.recording then table1.stopRecording() end
+		if mode == 1 and not table1.recording then
+			table1.startRecording()
+		elseif mode == 0 and table1.recording then
+			table1.stopRecording()
+		end
 	end)
 
-	-- 5 Macro Autoload Target
+	table1.syncMacroAutoloadSelectionFromUI = function()
+		local name = ""
+		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
+			local mode = tonumber(table1.macroAutoloadSelect:GetAttribute("Mode")) or 0
+			local st = table1.maintoggleState[table1.macroAutoloadSelect]
+			if st and st.dropdownButtons and st.dropdownButtons[mode] then
+				local t = st.dropdownButtons[mode].Text
+				if t and t ~= "None" and not string.find(t, "Select") then
+					name = t
+				end
+			elseif table1.autoloadMacroNames and table1.autoloadMacroNames[mode] then
+				local t = table1.autoloadMacroNames[mode]
+				if t and t ~= "None" then
+					name = t
+				end
+			end
+		end
+		table1.autoloadData.macroConfig = name
+		return name
+	end
+
 	table1.rebuildMacroAutoloadSelect = function(force)
 		table1.getMacroList()
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent and not force then
 			return
 		end
-		local savedPos
+		local savedOrder, savedPos
 		if table1.macroAutoloadSelect and table1.macroAutoloadSelect.Parent then
+			savedOrder = table1.macroAutoloadSelect:GetAttribute("LayoutOrder")
 			savedPos = table1.macroAutoloadSelect.Position
 			table1.macroAutoloadSelect:Destroy()
 		end
@@ -2818,36 +2886,75 @@ do
 			table.insert(table1.autoloadMacroNames, n)
 		end
 		local args = { "Macro Autoload Target" }
-		for _, n in ipairs(table1.autoloadMacroNames) do table.insert(args, n) end
+		for _, n in ipairs(table1.autoloadMacroNames) do
+			table.insert(args, n)
+		end
 		table.insert(args, 1)
 		table.insert(args, table1.mainpage)
 		table.insert(args, true)
 		table.insert(args, 4)
 		table.insert(args, 0)
 		table1.macroAutoloadSelect, table1.macroAutoloadSelectChanged = table1.maintoggle(table.unpack(args))
-		pinToggle(table1.macroAutoloadSelect, 5)
-		if savedPos then table1.macroAutoloadSelect.Position = savedPos end
+		table1.macroAutoloadSelect:SetAttribute("LayoutOrder", savedOrder or 5)
+		if savedPos then
+			table1.macroAutoloadSelect.Position = savedPos
+		end
 		local restoreMode = 1
 		if table1.autoloadData.macroConfig and table1.autoloadData.macroConfig ~= "" then
 			for i, n in ipairs(table1.autoloadMacroNames) do
-				if n == table1.autoloadData.macroConfig then restoreMode = i break end
+				if n == table1.autoloadData.macroConfig then
+					restoreMode = i
+					break
+				end
 			end
 		end
 		table1.macroAutoloadSelect:SetAttribute("Mode", restoreMode)
+		local st = table1.maintoggleState[table1.macroAutoloadSelect]
+		if st then
+			st.currentmode = restoreMode
+			st.lastMode = restoreMode
+			st.selectedMode = restoreMode
+			if st.selectedModes then
+				for i = 1, (st.modecount or 0) do
+					local sel = (i == restoreMode)
+					st.selectedModes[i] = sel
+					table1.macroAutoloadSelect:SetAttribute("Selected" .. i, sel)
+					if st.dropdownButtons and st.dropdownButtons[i] then
+						st.dropdownButtons[i].BackgroundColor3 = sel and table1.selectedtabcolor or table1.tabinactive
+						st.dropdownButtons[i].BackgroundTransparency = sel and 0 or 0.15
+					end
+				end
+			end
+			if st.updateDropdownText then
+				st.updateDropdownText()
+			end
+		end
 		table1.macroAutoloadSelectChanged:Connect(function(mode)
 			mode = tonumber(mode) or 0
-			local chosen = table1.autoloadMacroNames and table1.autoloadMacroNames[mode] or ""
-			if chosen == "None" then chosen = "" end
-			table1.autoloadData.macroConfig = chosen
+			local chosen = ""
+			if table1.autoloadMacroNames and table1.autoloadMacroNames[mode] then
+				chosen = table1.autoloadMacroNames[mode]
+			end
+			local st2 = table1.maintoggleState[table1.macroAutoloadSelect]
+			if st2 and st2.dropdownButtons and st2.dropdownButtons[mode] then
+				local t = st2.dropdownButtons[mode].Text
+				if type(t) == "string" and t ~= "" then
+					chosen = t
+				end
+			end
+			if chosen == "None" or chosen == "" then
+				table1.autoloadData.macroConfig = ""
+			else
+				table1.autoloadData.macroConfig = chosen
+			end
 			table1.writeAutoload(table1.autoloadData)
 		end)
 	end
 	table1.rebuildMacroAutoloadSelect(true)
 
-	-- 6 Macro Autoload enable
 	table1.macroAutoloadEnable, table1.macroAutoloadEnableChanged =
 		table1.maintoggle("Macro Autoload", "On", 1, table1.mainpage, true, 0, 0)
-	pinToggle(table1.macroAutoloadEnable, 6)
+	table1.macroAutoloadEnable:SetAttribute("LayoutOrder", 6)
 	if table1.autoloadData.enabled then
 		table1.macroAutoloadEnable:SetAttribute("Mode", 1)
 		local st = table1.maintoggleState[table1.macroAutoloadEnable]
@@ -2858,36 +2965,55 @@ do
 		end
 	end
 	table1.macroAutoloadEnableChanged:Connect(function()
-		table1.autoloadData.enabled = (table1.macroAutoloadEnable:GetAttribute("Mode") or 0) == 1
+		local mode = table1.macroAutoloadEnable:GetAttribute("Mode") or 0
+		table1.autoloadData.enabled = (mode == 1)
+		if table1.syncMacroAutoloadSelectionFromUI then
+			table1.syncMacroAutoloadSelectionFromUI()
+		end
+		if table1.syncAutoloadSelectionFromUI then
+			table1.syncAutoloadSelectionFromUI()
+		end
 		table1.writeAutoload(table1.autoloadData)
 	end)
 
-	-- 7 Macro Settings dropdown multiselect
 	table1.macroSettingsToggle, table1.macroSettingsChanged =
 		table1.maintoggle("Macro Settings", "Wave Based Time", "Auto Vote Start", "Skip Failures Next Wave", 1, table1.mainpage, true, 2, 0)
-	pinToggle(table1.macroSettingsToggle, 7)
+	table1.macroSettingsToggle:SetAttribute("LayoutOrder", 7)
 	do
 		local st = table1.maintoggleState[table1.macroSettingsToggle]
 		local function setSel(i, on)
 			table1.macroSettingsToggle:SetAttribute("Selected" .. i, on == true)
-			if st and st.selectedModes then st.selectedModes[i] = on == true end
+			if st and st.selectedModes then
+				st.selectedModes[i] = on == true
+			end
+			if st and st.dropdownButtons and st.dropdownButtons[i] then
+				st.dropdownButtons[i].BackgroundColor3 = on and table1.selectedtabcolor or table1.tabinactive
+				st.dropdownButtons[i].BackgroundTransparency = on and 0 or 0.15
+			end
 		end
 		setSel(1, table1.macroSettings.wavebasedtime)
 		setSel(2, table1.macroSettings.autovotestart)
 		setSel(3, table1.macroSettings.skipfailuresandmoveontothenextwave)
+		if st and st.updateDropdownText then
+			st.updateDropdownText()
+		end
 	end
 	table1.macroSettingsChanged:Connect(function(idx, selected)
-		if idx == 1 then table1.macroSettings.wavebasedtime = selected == true
-		elseif idx == 2 then table1.macroSettings.autovotestart = selected == true
-		elseif idx == 3 then table1.macroSettings.skipfailuresandmoveontothenextwave = selected == true end
+		if idx == 1 then
+			table1.macroSettings.wavebasedtime = selected == true
+		elseif idx == 2 then
+			table1.macroSettings.autovotestart = selected == true
+		elseif idx == 3 then
+			table1.macroSettings.skipfailuresandmoveontothenextwave = selected == true
+		end
 	end)
 
-	-- 8 Macro Info — unlocked textboxes (no label overlap / minimize ghosts)
+	-- Macro Info: unlocked textboxes, hide when folded
 	table1.macroInfoToggle, table1.macroInfoChanged,
 		table1.macroInfoWaveBox, table1.macroInfoTimeBox, table1.macroInfoMoneyBox,
 		table1.macroInfoNameBox2, table1.macroInfoStatusBox, table1.macroInfoLogBox =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 6)
-	pinToggle(table1.macroInfoToggle, 8)
+	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
 	local infoBoxes = {
 		table1.macroInfoWaveBox,
 		table1.macroInfoTimeBox,
@@ -2906,7 +3032,6 @@ do
 			box.PlaceholderText = placeholders[i]
 			box.Text = placeholders[i]
 			box.ClearTextOnFocus = false
-			box.TextWrapped = true
 		end
 	end
 	do
@@ -2914,7 +3039,9 @@ do
 		if st then
 			st.normalHeight = 220
 			table1.macroInfoToggle:SetAttribute("LayoutHeight", 220)
-			table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 220)
+			if not st.folded then
+				table1.macroInfoToggle.Size = UDim2.new(0, st.toggleWidth or 180, 0, 220)
+			end
 		end
 	end
 
@@ -2923,6 +3050,14 @@ do
 		if not table1.waveStartTimes[wave] then
 			table1.waveStartTimes[wave] = os.clock()
 		end
+		local st = table1.maintoggleState[table1.macroInfoToggle]
+		local folded = st and st.folded
+		for _, box in ipairs(infoBoxes) do
+			if box then
+				box.Visible = not folded
+			end
+		end
+		if folded then return end
 		if table1.macroInfoWaveBox then
 			table1.macroInfoWaveBox.Text = "Wave: " .. tostring(wave)
 		end
@@ -2951,7 +3086,9 @@ do
 				table.insert(byWave[act.wave], act)
 			end
 			local waves = {}
-			for w in pairs(byWave) do table.insert(waves, w) end
+			for w in pairs(byWave) do
+				table.insert(waves, w)
+			end
 			table.sort(waves)
 			for _, w in ipairs(waves) do
 				table.insert(lines, "W" .. tostring(w))
@@ -2978,6 +3115,10 @@ do
 				local st = table1.maintoggleState[table1.macroInfoToggle]
 				if st and not st.folded then
 					table1.refreshMacroInfo()
+				else
+					for _, box in ipairs(infoBoxes) do
+						if box then box.Visible = false end
+					end
 				end
 			end
 			task.wait(0.5)
@@ -2992,25 +3133,24 @@ do
 		local name = tostring(data.macroConfig or "")
 		if name == "" or name == "None" then return end
 		if table1.loadMacro(name) then
-			if table1.macroNameBox then table1.macroNameBox.Text = name end
-			if table1.refreshMacroInfo then table1.refreshMacroInfo() end
+			if table1.macroNameBox then
+				table1.macroNameBox.Text = name
+			end
+			if table1.refreshMacroInfo then
+				table1.refreshMacroInfo()
+			end
 		end
 	end)
 
 	task.defer(function()
-		if table1.refreshMacroInfo then table1.refreshMacroInfo() end
+		if table1.refreshMacroInfo then
+			table1.refreshMacroInfo()
+		end
 	end)
 end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
-
-
-
-
-
-
-
 
 
 -- beginning of absolute idk what i coded music stuff, dont touch 
