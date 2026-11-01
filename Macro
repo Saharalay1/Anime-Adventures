@@ -2182,7 +2182,6 @@ do
 		spaminterval = 0.05,
 		maxspamattempts = 200,
 	}
-
 	table1.recording = false
 	table1.replaying = false
 	table1.currentMacroName = nil
@@ -2194,35 +2193,43 @@ do
 	table1.macroIgnoreReplay = false
 	table1.macrolistnames = {}
 
-	local endpoints, unitsFolder, waveValue = nil, nil, nil
-
-	local function safeGetEndpoints()
-		if endpoints and endpoints.Parent then return endpoints end
+	-- forced remote root
+	local function resolveMpmp()
 		local ok, rs = pcall(function() return game:GetService("ReplicatedStorage") end)
 		if not ok or not rs then return nil end
 		local e = rs:FindFirstChild("endpoints")
 		if e then e = e:FindFirstChild("client_to_server") end
-		endpoints = e
+		return e
+	end
+	table1.mpmp = resolveMpmp()
+
+	local endpoints, unitsFolder, waveValue = nil, nil, nil
+	local function safeGetEndpoints()
+		if table1.mpmp and table1.mpmp.Parent then
+			endpoints = table1.mpmp
+			return endpoints
+		end
+		if endpoints and endpoints.Parent then return endpoints end
+		endpoints = resolveMpmp()
+		table1.mpmp = endpoints
 		return endpoints
 	end
-
 	local function safeGetUnits()
 		if unitsFolder and unitsFolder.Parent then return unitsFolder end
 		unitsFolder = table1.Workspace:FindFirstChild("_UNITS")
 		return unitsFolder
 	end
-
 	local function safeGetWave()
 		if waveValue and waveValue.Parent then return waveValue end
 		waveValue = table1.Workspace:FindFirstChild("_wave_num")
 		return waveValue
 	end
 
+	-- ONLY the remotes you listed + vote_start for autovote
 	local ACTION_REMOTES = {
 		spawn_unit = true,
-		upgrade_unit_ingame = true,
 		sell_unit_ingame = true,
-		change_priority = true,
+		upgrade_unit_ingame = true,
 		use_active_attack = true,
 		vote_start = true,
 	}
@@ -2236,7 +2243,6 @@ do
 		return n
 	end
 
-	-- JSON-safe arg packing (Instances / Vector3 / etc. break JSONEncode otherwise)
 	local function serializeValue(v)
 		local t = typeof(v)
 		if t == "nil" then
@@ -2325,7 +2331,6 @@ do
 		elseif t == "string" then
 			return v.v
 		end
-		-- plain array-like without __t
 		if v.n or #v > 0 then
 			local out = {}
 			for i = 1, (v.n or #v) do
@@ -2347,7 +2352,6 @@ do
 		end
 		return deserializeValue(args)
 	end
-
 
 	local function getMoney()
 		local ok, gui = pcall(function()
@@ -2419,7 +2423,6 @@ do
 			end)
 		end
 	end
-
 	table1.autoloadData = table1.autoloadData or table1.readAutoload()
 
 	local function onWaveChanged(newWave)
@@ -2473,7 +2476,7 @@ do
 		return out
 	end
 
-	-- Forward call first, capture return. Only log successful calls (not false).
+	-- ALWAYS record the listed remotes while recording (no return-value filter)
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -2484,15 +2487,17 @@ do
 					local remoteSelf = self
 					local nArgs = select("#", ...)
 					local packed = { ... }
-					local ret = results[1]
 					task.defer(function()
 						pcall(function()
-							if ret == false then return end
 							if typeof(remoteSelf) ~= "Instance" then return end
 							local cn = remoteSelf.ClassName
 							if cn ~= "RemoteEvent" and cn ~= "RemoteFunction" then return end
 							local remoteName = remoteSelf.Name
 							if not ACTION_REMOTES[remoteName] then return end
+							-- force it to be under the correct folder
+							local ep = safeGetEndpoints()
+							if not ep then return end
+							if remoteSelf.Parent ~= ep and not remoteSelf:IsDescendantOf(ep) then return end
 							local args = {}
 							for i = 1, nArgs do
 								args[i] = packed[i]
@@ -2510,7 +2515,6 @@ do
 								remotePath = remoteSelf:GetFullName(),
 								moneyAtTime = getMoney(),
 								timestamp = os.clock(),
-								result = ret,
 							})
 							if remoteName == "spawn_unit" then
 								table1.lastPlaceArgs = args
@@ -2577,7 +2581,6 @@ do
 	function table1.saveMacro(name)
 		if type(name) ~= "string" or name == "" then return false end
 		ensureMacroFolder()
-		-- always dump the live temporary recording (actions + wave + timeOffset + remotes)
 		local actionsOut = {}
 		for i, act in ipairs(table1.recordedActions or {}) do
 			actionsOut[i] = {
@@ -2590,7 +2593,6 @@ do
 				unitId = act.unitId,
 				remotePath = act.remotePath,
 				moneyAtTime = act.moneyAtTime,
-				result = act.result,
 			}
 		end
 		local data = {
@@ -2841,7 +2843,6 @@ do
 	-- 6 Macro Autoload
 	-- 7 Macro Settings
 	-- 8 Macro Info
-
 	table1.rebuildMacroSelection = function(force)
 		table1.getMacroList()
 		if table1.macroSelectMain and table1.macroSelectMain.Parent and not force then
@@ -3148,12 +3149,10 @@ do
 		end
 	end)
 
-	-- Macro Info: 1 Refresh + manually placed textboxes (all visible when expanded)
 	table1.macroInfoToggle, table1.macroInfoChanged =
 		table1.maintoggle("Macro Info", "Refresh", 1, table1.mainpage, true, 3, 0)
 	table1.macroInfoToggle:SetAttribute("LayoutOrder", 8)
 	table1.macroInfoToggle.ClipsDescendants = true
-
 	local function makeInfoBox(name, y)
 		local box = Instance.new("TextBox")
 		box.Name = name
@@ -3180,8 +3179,6 @@ do
 		c.Parent = box
 		return box
 	end
-
-	-- stacked so every line is on-screen (header ~28, refresh row ~26, then boxes)
 	table1.macroInfoWaveBox = makeInfoBox("MacroInfoWave", 64)
 	table1.macroInfoTimeBox = makeInfoBox("MacroInfoTime", 90)
 	table1.macroInfoMoneyBox = makeInfoBox("MacroInfoMoney", 116)
@@ -3192,14 +3189,12 @@ do
 	table1.macroInfoLogBox.TextWrapped = true
 	table1.macroInfoLogBox.MultiLine = true
 	table1.macroInfoLogBox.TextYAlignment = Enum.TextYAlignment.Top
-
 	table1.macroInfoWaveBox.Text = "Wave: -"
 	table1.macroInfoTimeBox.Text = "Time on wave: -"
 	table1.macroInfoMoneyBox.Text = "Money: -"
 	table1.macroInfoNameBox2.Text = "Macro: (temporary)"
 	table1.macroInfoStatusBox.Text = "Rec:off Replay:off Actions:0"
 	table1.macroInfoLogBox.Text = "Action log (empty)"
-
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
 		local totalH = 194 + 72 + 12
@@ -3214,7 +3209,6 @@ do
 			end
 		end
 	end
-
 	table1.macroInfoSetFolded = function(folded)
 		local boxes = {
 			table1.macroInfoWaveBox,
@@ -3234,8 +3228,6 @@ do
 			st.folded = folded
 		end
 	end
-
-	-- hide content whenever fold button is used
 	do
 		local st = table1.maintoggleState[table1.macroInfoToggle]
 		if st and st.fold and st.fold:IsA("GuiButton") then
@@ -3245,7 +3237,6 @@ do
 					local isFolded = false
 					if s2 then
 						isFolded = s2.folded == true
-						-- also treat short height as folded
 						if table1.macroInfoToggle.Size.Y.Offset <= (table1.toggleheight or 25) + 8 then
 							isFolded = true
 						end
@@ -3254,7 +3245,6 @@ do
 				end)
 			end)
 		end
-		-- size change watcher (covers any fold path)
 		table1.macroInfoToggle:GetPropertyChangedSignal("Size"):Connect(function()
 			local h = table1.macroInfoToggle.Size.Y.Offset
 			local folded = h <= (table1.toggleheight or 25) + 10
