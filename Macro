@@ -2346,13 +2346,11 @@ do
 		end)
 	end)
 
-	-- read-only remote log: never block or replace the original call
 	local function safeCopyArgs(args)
 		local out = {}
 		for i = 1, #args do
 			local v = args[i]
-			local t = typeof(v)
-			if t == "table" then
+			if typeof(v) == "table" then
 				local ok, copied = pcall(deepCopy, v)
 				out[i] = ok and copied or v
 			else
@@ -2362,38 +2360,46 @@ do
 		return out
 	end
 
+	-- Log AFTER the remote is sent so recording never blocks/rejects the call.
+	-- Forwards original ... only. No metatable writes.
 	if type(hookmetamethod) == "function" then
 		local oldNamecall
 		oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-			local method = getnamecallmethod()
-			local args = { ... }
 			if table1.recording and not table1.replaying and not table1.macroIgnoreReplay then
+				local method = getnamecallmethod()
 				if method == "FireServer" or method == "InvokeServer" then
-					pcall(function()
-						if typeof(self) ~= "Instance" then return end
-						if self.ClassName == "UnreliableRemoteEvent" then return end
-						local className = self.ClassName
-						if className ~= "RemoteEvent" and className ~= "RemoteFunction" then return end
-						local remoteName = self.Name
-						if not ACTION_REMOTES[remoteName] then return end
-						local wave = getCurrentWave()
-						local entry = {
-							wave = wave,
-							timeOffset = getTimeSinceWaveStart(wave),
-							actionType = remoteName,
-							method = method,
-							args = safeCopyArgs(args),
-							unitName = nil,
-							unitId = args[1],
-							remotePath = self:GetFullName(),
-							moneyAtTime = getMoney(),
-							timestamp = os.clock(),
-						}
-						table.insert(table1.recordedActions, entry)
-						if remoteName == "spawn_unit" then
-							table1.lastPlaceArgs = args
-							table1.lastPlaceTime = os.clock()
-						end
+					local remoteSelf = self
+					local nArgs = select("#", ...)
+					local packed = { ... }
+					task.defer(function()
+						pcall(function()
+							if typeof(remoteSelf) ~= "Instance" then return end
+							local cn = remoteSelf.ClassName
+							if cn ~= "RemoteEvent" and cn ~= "RemoteFunction" then return end
+							local remoteName = remoteSelf.Name
+							if not ACTION_REMOTES[remoteName] then return end
+							local args = {}
+							for i = 1, nArgs do
+								args[i] = packed[i]
+							end
+							local wave = getCurrentWave()
+							table.insert(table1.recordedActions, {
+								wave = wave,
+								timeOffset = getTimeSinceWaveStart(wave),
+								actionType = remoteName,
+								method = method,
+								args = safeCopyArgs(args),
+								unitName = nil,
+								unitId = args[1],
+								remotePath = remoteSelf:GetFullName(),
+								moneyAtTime = getMoney(),
+								timestamp = os.clock(),
+							})
+							if remoteName == "spawn_unit" then
+								table1.lastPlaceArgs = args
+								table1.lastPlaceTime = os.clock()
+							end
+						end)
 					end)
 				end
 			end
@@ -3136,6 +3142,7 @@ end
 -- ============================================================
 -- END MACRO SYSTEM
 -- ============================================================
+
 
 
 
